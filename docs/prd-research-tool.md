@@ -154,6 +154,7 @@ Dependency rule: **arrows point downward only.** A module never imports from a l
   /lib
     /config.ts                   ← constants, default actor ids, thresholds  (Layer 1) — NO secrets
     /settings.ts                 ← getSettings()/setSettings(): read/write keys from settings table (Layer 2)
+    /http.ts                     ← fetchWithTimeout(): shared per-request timeout wrapper (Layer 2)
     /types.ts                    ← all shared TS types                       (Layer 1)
     /pure
       /x-factor.ts               ← weighted score, baseline, x-factor        (Layer 0)
@@ -162,8 +163,9 @@ Dependency rule: **arrows point downward only.** A module never imports from a l
       /similarity.ts             ← cosine, combined sim, thresholds          (Layer 0)
       /image-groups.ts           ← union-find image grouping                 (Layer 0)
       /content-clusters.ts       ← average-linkage content clustering        (Layer 0)
-      /url.ts                    ← extractActivityId, normalizeProfileUrl    (Layer 0)
+      /url.ts                    ← extractActivityId, normalizeProfileUrl, slug/handle (Layer 0)
       /lang.ts                   ← isLikelyNonEnglish                         (Layer 0)
+      /embed-text.ts             ← buildEmbeddingText (content + image desc)  (Layer 0)
       /vector-blob.ts            ← Float32 ⇄ BLOB serialize/deserialize       (Layer 0)
     /db
       /schema.sql                ← full DDL (tables + indexes)
@@ -184,7 +186,8 @@ Dependency rule: **arrows point downward only.** A module never imports from a l
       /creators/route.ts         ← GET/POST/DELETE creators                  (Layer 4)
       /scrape/route.ts           ← POST start scrape                         (Layer 4)
       /scrape/[id]/route.ts      ← GET scrape job status                     (Layer 4)
-      /settings/route.ts         ← GET/PUT BYO keys + actor ids + test       (Layer 4)
+      /settings/route.ts         ← GET/PUT BYO keys + actor ids              (Layer 4)
+      /settings/test/route.ts    ← POST per-provider connection test         (Layer 4)
     /page.tsx                    ← dashboard                                 (Layer 5)
     /DashboardClient.tsx
     /DashboardFilterBar.tsx
@@ -374,7 +377,7 @@ Rules:
 
 ### 7.2 Text to embed
 Combine post text with the image description (if present) so visual topic signal lands in
-the text vector:
+the text vector. This is a pure Layer 0 helper (`lib/pure/embed-text.ts`, zero I/O):
 
 ```ts
 function buildEmbeddingText(content: string | null, imageDescription?: string | null): string {
@@ -389,7 +392,18 @@ function buildEmbeddingText(content: string | null, imageDescription?: string | 
 - On success, serialize each 1024-float vector to a Float32 little-endian BLOB
   (`/lib/pure/vector-blob.ts`) and write to `posts.embedding` (+ `embedded_at = now`).
 - **Never re-embed** a post that already has `embedding` unless an explicit `reEmbed`
-  flag is passed (used after image descriptions are added).
+  flag is passed (used after image descriptions are added). The unembedded loader
+  (`getUnembedded(limit, { reEmbed })`) filters on `embedding IS NULL` by default and drops that
+  filter under `reEmbed`.
+
+**Enrich contract** (`enrichPosts(limit, { reEmbed? }) → { embedded, remaining }`, Layer 3):
+- Load ≤`limit` candidates, build each embedding text (§7.2), batch-embed, write BLOBs.
+- `embedded` = posts written this call; `remaining` = posts still lacking an embedding afterward
+  (`countUnembedded()`), so a caller can loop until the backlog drains.
+- A batch-level Voyage failure **throws** (the caller logs it non-fatally, §10.5). Per-image work is
+  independently **non-fatal**: a failed image embed/description is logged and the post still gets its
+  text embedding. Writing an embedding **preserves** any existing `image_description` — it is only
+  overwritten when Claude returns a new one (so descriptions survive a text-only re-embed).
 
 ### 7.4 Image description (OPTIONAL, can be deferred to v1.1)
 If enabled: for posts with an image, call Claude vision (`claude-sonnet-4-6`) to produce a
@@ -451,9 +465,9 @@ DB):
    `posted_at` (uses `posts_author_posted_idx`).
 3. For each post by that author, compute `weighted_score`, then the window baseline & x-factor
    per §8.3, and `UPDATE` `weighted_score`, `creator_baseline`, `x_factor`.
-4. **Match strictly on `author_id`** (clean slug/handle), **never on `author_url`** (which
-   may carry `?miniProfileUrn=…` query strings that break equality). This was the original's
-   key bug fix — preserve it.
+4. **Match strictly on `author_id`** (clean slug/handle), **never on `author_url`** — profile urls
+   may carry `?miniProfileUrn=…` query strings that break equality, so matching on the url would
+   scatter one author's history across several "authors" and corrupt every baseline.
 5. Non-fatal: log errors, never let recompute failure abort the scrape.
 
 > Optional optimization (original updated only the most-recent 30d of posts while using older
@@ -570,10 +584,15 @@ MAX_POSTS_PER_PROFILE = { '24h':10,'3d':20,week:30,month:50,'3months':100, custo
 
 ### 10.3 Field mapping (pure, `lib/pure/mappers.ts`)
 
+The mappers are **total, pure functions**: they map a raw item to a row and throw only when no id
+can be derived. Cross-cutting concerns (language filtering, dedup) live in the scrape job (§10.5),
+not here — keeping the mapper a clean, fully-unit-testable transform.
+
 **`mapApifyPostToRow(raw, market): PostRow` (LinkedIn)**
 - `id` = canonical activity id from the post URL via `extractActivityId(raw.linkedinUrl)`
-  (regex `(?:activity|ugcPost|share)[-:](\d+)`); fallback to `raw.id`. **Derive id from the
-  URL's canonical URN, not raw.id** (raw.id can be a feed-event URN — original bug fix).
+  (regex `(?:activity|ugcPost|share)[-:](\d+)`); fallback to `raw.id`. **Derive the id from the
+  URL's canonical URN, not `raw.id`** — `raw.id` can be a feed-event URN, which would key the same
+  post under different ids across scrapes and defeat dedup.
 - `url` = canonical LinkedIn url built from the id.
 - `author_url` = `raw.author.linkedinUrl` (may have query string — store but never match on).
 - `author_id` = `raw.author.universalName ?? raw.author.publicIdentifier` (clean slug).
@@ -583,8 +602,7 @@ MAX_POSTS_PER_PROFILE = { '24h':10,'3d':20,week:30,month:50,'3months':100, custo
 - `is_repost` = `!!raw.repostedBy`.
 - `image_url` = first `raw.postImages[].url` (if any).
 - `platform = 'linkedin'`; `raw_data = JSON.stringify(raw)`; embeddings/x-factor null.
-- Skip non-English via `isLikelyNonEnglish(raw.content)`.
-- **Throw** if no id can be derived (matches original `throws on missing post id`).
+- **Throw** if no id can be derived.
 
 **`mapApifyTweetToRow(raw, market): PostRow` (Twitter)**
 - `id` = `tweet-${raw.id}` (prefix prevents collision with LinkedIn ids).
@@ -594,7 +612,7 @@ MAX_POSTS_PER_PROFILE = { '24h':10,'3d':20,week:30,month:50,'3months':100, custo
 - `posted_at` = `new Date(raw.createdAt).toISOString()`.
 - `likes = raw.likeCount`, `shares = raw.retweetCount`, `comments = raw.replyCount`.
 - `is_repost = raw.isRetweet ?? false`.
-- `platform = 'twitter'`; English filter on `raw.text`; `raw_data` = JSON.
+- `platform = 'twitter'`; `raw_data = JSON.stringify(raw)`.
 
 ### 10.4 Deduplication
 - **Level 1 (in-memory, pure, `lib/pure/dedup.ts`):** merge keyword + creator arrays into a
@@ -611,27 +629,51 @@ async function runScrape(opts: {
   platforms: ('linkedin'|'twitter')[],
   mode: 'keyword'|'creator'|'both',
   keywords?: string[],
-  creatorIds?: string[],         // which creators (tier 'core' by default) to pull
+  creatorIds?: string[],         // which creators to pull; defaults to every tier-'core' creator
   timeframe: Timeframe,
   market: string,
+  jobId?: string,                // pre-created job row (§10.6); runScrape creates one when absent
 }): Promise<ScrapeStats>
 ```
-1. Create a `scrape_jobs` row (`status='running'`).
-2. Build the set of actor runs needed (keyword and/or creator × linkedin and/or twitter).
-3. Run them with `Promise.all` (Apify start → poll status → fetch dataset). Neither blocks
-   the other; a single actor failure must not abort the others (catch per-run, record raw=0).
-4. Map each dataset to rows (§10.3), merge + dedup (§10.4).
-5. Insert new rows; record counts (`keyword_raw, creator_raw, merged_total, duplicates,
-   found_in_both, inserted`).
-6. Fire-and-forget **enrich** (embeddings) for newly inserted posts, then **recomputeXFactors**
-   for affected `author_id`s. (Both non-fatal.)
-7. Update `scrape_jobs` row to `succeeded` (or `failed` with `error`), set `finished_at`.
+1. Resolve the `scrape_jobs` row: use `opts.jobId` if provided (the route creates it up front so it
+   can return immediately, §10.6), otherwise create one (`status='running'`).
+2. **Plan the actor runs** for the requested platforms × mode. Each run is tagged `keyword` or
+   `creator`. For creator runs, resolve targets from `creatorIds` (or all `core` creators), split by
+   platform → LinkedIn profile urls / Twitter handles. Skip any run whose actor id is unset or whose
+   input list is empty (e.g. keyword mode with no keywords, or creator mode with no matching
+   creators) — surface a Settings prompt when a needed actor id is missing.
+3. Run them with `Promise.all` (each: Apify start → poll status → fetch dataset). Catch **per run**:
+   a single actor failure records `raw=0` and must not abort the others. If **every** planned run
+   fails, mark the job `failed` and stop (never report an empty success from a total outage).
+4. Map each dataset to rows (§10.3); **skip non-English** (`isLikelyNonEnglish` on the mapped
+   `content`) and any item the mapper rejects (missing id) — both non-fatal, logged. Merge keyword +
+   creator arrays and dedup (§10.4).
+5. Determine which rows are new (`findExistingIds`), insert them (`INSERT OR IGNORE`), and record
+   counts (`keyword_raw, creator_raw, merged_total, duplicates, found_in_both, inserted`).
+6. Mark the job `succeeded` with the stats, then run two **non-fatal** follow-ons: **enrich**
+   (drain up to a fixed batch of unembedded posts), then **recomputeXFactors** for the distinct
+   `author_id`s among the newly-inserted rows only (§8.4). A failure in either is logged, not raised.
+7. `finished_at` is set by the `succeeded`/`failed` transition. Any unexpected error in the pipeline
+   marks the job `failed` with the message.
 
 ### 10.6 Async progress model (no serverless time limit locally, but keep it responsive)
-- `POST /api/scrape` creates the job, kicks off `runScrape` **without awaiting**, returns
-  `{ jobId }` immediately.
+- `POST /api/scrape` creates the `scrape_jobs` row itself (so it has an id to return synchronously),
+  then kicks off `runScrape` with that `jobId` **without awaiting**, and returns `{ jobId }`
+  immediately. `runScrape` owns every subsequent status transition on that row.
 - `GET /api/scrape/[id]` returns the live `scrape_jobs` row so the UI can poll a progress
   pill ("Scraping… / Scrape complete / N new posts").
+
+### 10.7 Poll & timeout policy
+Apify runs are polled every **1500 ms**, up to **400 polls** (~10-min ceiling). Reaching the ceiling
+without `SUCCEEDED` **throws a timeout error and the job is marked `failed`** — it is **never reported
+`succeeded` with partial data** (a silently-wrong "empty week" is worse than a visible failure).
+Per-request fetch timeouts (`AbortSignal.timeout`-equivalent, via `lib/http.ts`): actor start **30 s**,
+status poll **30 s**, dataset items **60 s**, Voyage embed batch **60 s**. These bound single-request
+latency; the whole-run budget is the poll ceiling (`MAX_POLLS × POLL_INTERVAL`), **not** a fetch
+timeout. Retries/backoff are intentionally **deferred** — a dropped embed batch self-heals on the next
+enrich run, and a transient scrape error is caught per-actor (`raw=0`); add backoff only if provider
+429s appear in practice. If Apify runs frequently sit `QUEUED` and trip the ceiling, raise `MAX_POLLS`
+(queue time counts toward it) rather than changing the per-fetch timeouts.
 
 ---
 
@@ -655,39 +697,56 @@ textThreshold=float                        (default 0.65)
 page=int  pageSize=int                      (default 50, max 200)
 ```
 Behavior:
-- **Grouping mode** (`groupByImage` or `discoverTrends` true): load up to **400** filtered
-  posts that have the required embeddings, run §9 clustering in JS, return groups/clusters +
-  the posts (with `imageGroupSize` annotation), `hasMore:false`.
 - **Paginated mode** (default): SQL `WHERE` from filters + `ORDER BY` from `sort` + `LIMIT/OFFSET`.
-  Return `posts`, `total` (count query), `page`, `pageSize`, `hasMore` (exact:
-  `offset + posts.length < total`).
-- Always also return `availableAuthors` (distinct `author_id`+`author_name`+`avatar`) for the
-  creator filter dropdown.
+  Response: `{ posts, total, page, pageSize, hasMore, availableAuthors }`, where `hasMore` is exact
+  (`offset + posts.length < total`). `posts` are serialized **without** the `embedding`,
+  `image_embedding`, and `raw_data` columns (never ship BLOBs/vectors over the wire).
+- **Grouping mode** (`groupByImage` or `discoverTrends` true): load up to **400** filtered posts
+  that carry the required embeddings, run §9 clustering in JS, and return `{ posts, hasMore:false,
+  availableAuthors }` plus **`imageGroups`** (for `groupByImage`) or **`contentClusters`** (for
+  `discoverTrends`). Candidate `posts` drop their vectors too; under `groupByImage` each is annotated
+  with `imageGroupSize` (its group's size, `1` if ungrouped). `groupByImage` takes precedence if both
+  flags are set. `imageThreshold`/`textThreshold` override the §9.2 defaults.
+- `availableAuthors` (always present) is the distinct `author_id`+`author_name`+`avatar` set for the
+  creator-filter dropdown. It honors the active filters **except** the `authors` include-list (so
+  selecting authors never shrinks the dropdown). The `posts` table has **no avatar column**, so
+  `avatar` is sourced from `creators.avatar_url` by matching on `author_id` (null when the author
+  isn't a tracked creator).
 
 Timeframe → `posted_at >= now - N`: `24h`=1d, `3d`=3d, `week`=7d, `month`=30d, `3months`=90d.
 
 ### 11.2 `GET/POST/DELETE /api/creators`
-- `GET` → list creators (optional `?tier=&tag=&platform=`), plus distinct tags.
-- `POST` → add one or many. Accept LinkedIn url, Twitter url, or `@handle`. Detect platform,
-  normalize url, derive `author_id`. Auto-fill `display_name`/`avatar_url` from any existing
-  post by that author if present. Promote `watch`→`core` if already exists. `core` cannot be
-  downgraded silently.
-- `DELETE /api/creators?id=` → remove a creator.
+Platform detection / url normalization / `author_id` derivation happen **at the route layer** via
+`lib/pure/url.ts`; the repo is storage-only.
+- `GET` (optional `?tier=&tag=&platform=`) → `{ creators, tags }` (distinct tags across all creators).
+- `POST` body `{ input?: string, inputs?: string[], tier?, tags?, market?, notes? }` → add one or
+  many. Each entry may itself be newline/comma-separated. For each: detect platform (a `linkedin.com`
+  url → LinkedIn; a Twitter/X url or bare `@handle` → Twitter), normalize the url, and derive
+  `author_id` (`extractLinkedInSlug` for `/in/`|`/company/`, `extractTwitterHandle` for Twitter).
+  Auto-fill `display_name` from any existing post by that author. Entries that resolve to no valid
+  url/handle are skipped; a body with **zero** valid entries → `400`. Re-adding an existing creator
+  promotes `watch`→`core` (never downgrades). Returns the refreshed `{ creators, tags }`.
+- `DELETE /api/creators?id=` → remove a creator (`{ ok:true }`); missing `id` → `400`.
 
 ### 11.3 `POST /api/scrape` / `GET /api/scrape/[id]`
 See §10.6. Before starting, the route checks required keys (Apify token; Voyage key for the
-follow-on enrich). If missing → `412` with `{ needs: ['apify_api_token', ...] }` so the UI can
-deep-link to Settings.
+follow-on enrich). If either is missing → `412` with `{ needs: ['apify_api_token', ...] }` so the UI
+can deep-link to Settings. Otherwise it creates the job and returns **`202 { jobId }`** immediately.
+Body: `{ platforms?, mode?, keywords?, creatorIds?, timeframe?, market? }` (defaults: all platforms,
+`both`, `week`, `market` from `default_market`). `GET /api/scrape/[id]` → the live `scrape_jobs` row,
+or `404` when the id is unknown.
 
 ### 11.4 `GET/PUT /api/settings` — BYO keys & actor config
-- `GET` → returns all settings with **secret values masked** (e.g. `apify_api_token: "set"` /
-  `"unset"`, never the raw value) plus the non-secret actor ids + a `ready` summary
-  (`{ apify: bool, voyage: bool, anthropic: bool }`) the UI uses to gate features.
-- `PUT` → upserts provided keys into the `settings` table. Accepts a partial object; only the
-  keys present are written. Trim values; empty string clears a key.
+- `GET` → `{ settings, ready }`. `settings` is the full merged map with **secret values masked**
+  (`apify_api_token: "set" | "unset"`, never the raw value) alongside the non-secret actor ids;
+  `ready` is `{ apify: bool, voyage: bool, anthropic: bool }` the UI uses to gate features.
+- `PUT` → upserts provided keys into the `settings` table. Accepts a partial object; only the keys
+  present are written; values are trimmed; empty string clears a key. Returns the same masked
+  `{ settings, ready }` view so the UI can refresh in place.
 - `POST /api/settings/test` (optional but recommended) → runs a cheap live check per provider
   (Apify: `GET /v2/users/me`; Voyage: 1-token embed; Anthropic: 1-token message) and returns
-  per-provider `{ ok, error? }` so onboarding can show green/red without a full scrape.
+  `{ apify: { ok, error? }, voyage: {…}, anthropic: {…} }`. A provider with no key is reported
+  `{ ok:false, error }` without a network call, so onboarding can show green/red without a full scrape.
 
 ---
 
@@ -709,13 +768,16 @@ Order within the layer (each independent, can be parallelized):
 5. **`content-clusters.ts`** — average-linkage. *Tests:* pair above 0.65 clusters; the avg+floor
    join guard; no merging of two assigned clusters; centrality picks label; size<2 dropped.
 6. **`url.ts`** — `extractActivityId` (all three URN forms), `normalizeProfileUrl` (strips
-   `?miniProfileUrn`), Twitter handle extraction. *Tests:* each form + garbage → null.
+   `?miniProfileUrn`), `extractLinkedInSlug` (`/in/`|`/company/` → slug), `extractTwitterHandle`.
+   *Tests:* each form + garbage → null.
 7. **`lang.ts`** — `isLikelyNonEnglish`. *Tests:* English passes, obvious non-Latin fails, null ok.
 8. **`mappers.ts`** — `mapApifyPostToRow`, `mapApifyTweetToRow`. *Tests (from CLAUDE.md spec):*
    correct field mapping; null engagement → 0; null content no throw; **throws on missing id**;
    tweet id prefixed; id derived from URL not raw.id.
 9. **`dedup.ts`** — `mergeAndDeduplicate`, `deduplicatePosts`. *Tests:* the full CLAUDE.md dedup
    suite (both→'both', source preservation, empties, null ids, first-wins).
+9b. **`embed-text.ts`** — `buildEmbeddingText(content, imageDescription?)` (§7.2). *Tests:* trims
+   content, appends the `[Image content: …]` suffix, treats null content / empty description as no-op.
 
 ### Layer 1 — Config & types
 10. **`config.ts`** — export **non-secret** constants, thresholds, and **default** actor ids.
@@ -725,6 +787,11 @@ Order within the layer (each independent, can be parallelized):
     *Test:* types compile under strict mode (type-level tests optional).
 
 ### Layer 2 — I/O adapters (mock all external calls in tests)
+> Shared helper: **`lib/http.ts`** — `fetchWithTimeout(url, init, ms)` wraps `fetch` with an
+> `AbortController` + `setTimeout` (a plain timer the test suite can drive with fake timers) and
+> always clears it. Every external adapter (Apify, Voyage) calls through it for its per-request
+> timeouts (§10.7). *Tests:* covered via the adapter abort tests (a hung request rejects).
+
 12. **`db/db.ts` + `schema.sql`** — process-wide `better-sqlite3` singleton with three exports:
     - `getDb(path?)` — returns the singleton. Called with **no arg** in app/repo code (opens at
       `DB_PATH`, migrating on first open). Called **with an explicit path** (e.g. `':memory:'` in
@@ -741,15 +808,18 @@ Order within the layer (each independent, can be parallelized):
     second explicit call reopens a fresh db.
 13. **`db/posts.repo.ts`** — `insertPosts`, `findExistingIds/Urls`, `searchPosts(filters)`,
     `getCandidatesForClustering(filters, requireImageEmbedding)`, `getAuthorHistory(author_id)`,
-    `updateXFactor`, `getUnembedded`, `setEmbedding`. Notes: `getCandidatesForClustering` takes a
+    `getAvailableAuthors(filters)`, `updateXFactor`, `getUnembedded(limit, { reEmbed? })`,
+    `countUnembedded`, `setEmbedding`. Notes: `getCandidatesForClustering` takes a
     `requireImageEmbedding` flag (image grouping needs `image_embedding`; content clustering needs
     only text `embedding`) and orders by `likes DESC` so the 400-cap keeps the most-engaged
     candidates deterministically; it decodes BLOBs → `number[]` for the pure clustering fns.
-    `insertPosts` uses `INSERT OR IGNORE` and returns the count actually inserted. **`availableAuthors`
-    (§11.1) needs its own helper** (e.g. `getAvailableAuthors(filters)` → distinct
-    `author_id`+`author_name`+`avatar`) — add it here when building `/api/posts` (Layer 4).
+    `insertPosts` uses `INSERT OR IGNORE` and returns the count actually inserted. `getUnembedded`
+    filters on `embedding IS NULL` unless `reEmbed` is set; `countUnembedded` backs the enrich
+    `remaining` count. `getAvailableAuthors` (§11.1) applies the filters minus the `authors` list and
+    joins `creators.avatar_url` on `author_id` for the `avatar` field (posts carry no avatar column).
     *Tests:* against `:memory:` db with seeded rows — filters, pagination/`hasMore`, ordering,
-    x-factor update, dedup queries, clustering-candidate decode + image-required filter.
+    x-factor update, dedup queries, clustering-candidate decode + image-required filter,
+    `reEmbed`/`countUnembedded`, available-authors distinctness + avatar join.
 14. **`db/creators.repo.ts`** — surface is `upsertCreator(new)` (insert, or promote watch→core and
     fill newly-provided display fields when the `profile_url` already exists — never downgrades
     core), `listCreators(filter?)` → `{ creators, tags }` (distinct tags across ALL creators),
@@ -773,34 +843,49 @@ Order within the layer (each independent, can be parallelized):
 17. **`apify.ts`** — the four input builders (§10.2) plus `runActor(actorId, input)`, which
     encapsulates the full run: start → poll to SUCCEEDED → fetch dataset items. (No separate
     `startActor`/`pollRun`/`getResults` public surface — the scrape job calls `runActor` once per
-    actor.) **Reads the token from settings** and encodes the actor id `/`→`~` (§10.1). *Tests:*
-    msw-mock Apify HTTP; input builders are pure (assert shapes); poll resolves on SUCCEEDED, throws
-    on FAILED; actor id is `~`-encoded in the run URL; throws clearly when the token is unset.
+    actor.) **Reads the token from settings** and encodes the actor id `/`→`~` (§10.1). Applies the
+    §10.7 policy: per-request timeouts via `fetchWithTimeout`, and **throws a timeout error** if the
+    poll ceiling is reached without `SUCCEEDED` (never falls through to fetch a partial dataset).
+    *Tests:* msw-mock Apify HTTP; input builders are pure (assert shapes); poll resolves on SUCCEEDED,
+    throws on FAILED; **ceiling exhausted → throws and never fetches items**; **a hung fetch aborts**
+    via its timeout; actor id is `~`-encoded in the run URL; throws clearly when the token is unset.
 18. **`voyage.ts`** — `embedTexts(strings[]) → number[][]`, `embedImage(url) → number[]`.
     **Reads key from settings.** Batches text at 100 and **reorders each batch's vectors by the
-    response `index`** before concatenating (preserves input order). *Tests:* msw-mock Voyage; batch
-    of 100; out-of-order response reordered; error per-batch throws; throws clearly when key unset.
+    response `index`** before concatenating (preserves input order). Each request goes through
+    `fetchWithTimeout` (§10.7). *Tests:* msw-mock Voyage; batch of 100; out-of-order response
+    reordered; error per-batch throws; **a hung batch aborts** via its timeout; throws when key unset.
 19. **`anthropic.ts`** *(optional)* — `describeImage(url) → string | null`. Reads key from settings.
     **Contract:** returns `null` when the key is unset (feature disabled — the enrich job skips
     description); **throws** on an HTTP error so the enrich job can log it non-fatally (§7.4). Mocked.
 
 ### Layer 3 — Orchestration jobs
-20. **`jobs/enrich.ts`** — `enrichPosts(limit, {reEmbed})`: load unembedded posts, build text,
-    batch-embed, write BLOBs; optionally image-embed/describe. *Tests:* mocks repo + voyage;
-    never re-embeds unless `reEmbed`; remaining count correct.
-21. **`jobs/scrape.ts`** — `runScrape` (§10.5) + `recomputeXFactors` (§8.4). *Tests (adapt the
-    CLAUDE.md weekly-scrape suite):* both scrapers run in parallel; stats incl. duplicate/both
-    counts; one scraper empty still completes; both fail → job 'failed'; x-factor recompute
-    scoped to affected authors; recompute matches on author_id not author_url.
+20. **`jobs/enrich.ts`** — `enrichPosts(limit, {reEmbed}) → { embedded, remaining }` (§7.3): load
+    unembedded posts, build text, batch-embed, write BLOBs; per-image embed/describe is non-fatal and
+    preserves an existing description. *Tests:* mocks repo + voyage; never re-embeds unless `reEmbed`
+    (flag threads to the loader); text-only vs image post write paths; per-image failure still writes
+    the text vector; `remaining` count correct.
+21. **`jobs/scrape.ts`** — `runScrape` (§10.5, accepts an optional pre-created `jobId`) +
+    `recomputeXFactors` (§8.4). *Tests:* keyword + creator run in parallel; stats incl. duplicate/both
+    counts; one scraper empty still completes; **every scraper failing → job 'failed'** (and enrich is
+    skipped); non-English item skipped; x-factor recompute scoped to the just-inserted authors;
+    recompute matches on author_id not author_url.
 
 ### Layer 4 — API routes (integration tests with a temp db)
-22. **`/api/settings`** — GET (masked) / PUT (partial upsert) / POST test. *Tests:* secrets
-    masked on GET; partial PUT writes only given keys; `ready` summary reflects which keys set.
-23. **`/api/creators`** — GET/POST/DELETE. *Tests:* add by url/handle, list+filter, delete.
+22. **`/api/settings`** — GET (masked `{ settings, ready }`) / PUT (partial upsert, returns the same
+    view) / POST test (`{ apify, voyage, anthropic }`). *Tests:* secrets masked on GET (raw never
+    serialized); partial PUT writes only given keys + trims/clears; `ready` flips per key; test route
+    reports per-provider ok/error and skips a keyless provider.
+23. **`/api/creators`** — GET/POST/DELETE. *Tests:* add by LinkedIn url (normalized, slug derived) and
+    by `@handle`; auto-fill `display_name` from posts; add-many + promote watch→core; `400` on no
+    valid input; list + tier/tag/platform filter; delete (and `400` without id).
 24. **`/api/posts`** — paginated + grouping modes. *Tests:* each filter; sort modes; `hasMore`
-    exactness; grouping returns clusters; 400-cap respected.
-25. **`/api/scrape` + `/api/scrape/[id]`** — start returns jobId immediately; status polls row;
-    `412` when required keys missing.
+    exactness; BLOBs/`raw_data` stripped; `availableAuthors` always present; `groupByImage` returns
+    `imageGroups` + `imageGroupSize` annotation; `discoverTrends` returns `contentClusters`;
+    400-cap respected.
+25. **`/api/scrape` + `/api/scrape/[id]`** — start creates the job and returns `202 { jobId }`
+    immediately (fires `runScrape` with that id, unawaited); status GET returns the row or `404`.
+    *Tests:* `412 { needs }` when Apify/Voyage keys missing (lists only the still-missing ones);
+    running job created + `runScrape` handed the `jobId`; `[id]` returns the row and 404s on unknown.
 
 ### Layer 5 — UI (component + light e2e)
 26. **`SettingsPanel` + onboarding gate** — paste Apify token, Voyage key, optional Anthropic
