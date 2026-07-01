@@ -4,10 +4,13 @@
 import type { PostRow } from '@/lib/types'
 
 export function makePostRow(overrides: Partial<PostRow> = {}): PostRow {
+  const id = overrides.id ?? 'activity-1'
   return {
-    id: 'activity-1',
+    id,
     platform: 'linkedin',
-    url: 'https://www.linkedin.com/feed/update/urn:li:activity:1/',
+    // Derive a unique url from the id so multi-row seeds don't collide on the unique-url index.
+    // Any test that cares about url collisions overrides this explicitly.
+    url: `https://www.linkedin.com/feed/update/urn:li:activity:${id}/`,
     content: 'sample content',
     author_name: 'Sample Author',
     author_url: 'https://www.linkedin.com/in/sample',

@@ -167,11 +167,11 @@ Dependency rule: **arrows point downward only.** A module never imports from a l
       /vector-blob.ts            ← Float32 ⇄ BLOB serialize/deserialize       (Layer 0)
     /db
       /schema.sql                ← full DDL (tables + indexes)
-      /db.ts                     ← better-sqlite3 singleton + migrate()      (Layer 2)
+      /db.ts                     ← getDb()/migrate()/seedSettingsDefaults()/resetDb() (Layer 2)
       /posts.repo.ts             ← post queries (insert, search, group)      (Layer 2)
       /creators.repo.ts          ← creator CRUD                              (Layer 2)
       /jobs.repo.ts              ← scrape_jobs CRUD                          (Layer 2)
-      /settings.repo.ts          ← key/value settings (BYO API keys, actors) (Layer 2)
+      /settings.repo.ts          ← readAllSettings()/writeSettings() row access (Layer 2)
     /apify.ts                    ← Apify client + actor input builders       (Layer 2) — key from settings
     /voyage.ts                   ← embedText / embedImage                    (Layer 2) — key from settings
     /anthropic.ts                ← (optional) image description              (Layer 2) — key from settings
@@ -345,8 +345,17 @@ Known keys (seeded with non-secret defaults on first migrate; secrets start NULL
 | `default_market` | `ai` | no | |
 
 Rules:
-- All adapters (`apify.ts`, `voyage.ts`, `anthropic.ts`) read keys via `getSettings()`, never
-  from `process.env`.
+- **Seeding lives in `db.ts`, not `settings.repo.ts`.** `migrate(db)` runs the schema then calls
+  `seedSettingsDefaults(db)` (an `INSERT OR IGNORE` over the non-secret defaults) against the **exact
+  db being migrated**. This is co-located with `migrate()` deliberately: it lets migration seed a
+  test `:memory:` db and avoids a `db.ts` ↔ `settings.repo.ts` circular import. Secret keys are never
+  seeded — they start absent.
+- **`getSettings()` also merges defaults at read time** (`{ ...SETTINGS_DEFAULTS, ...storedRows }`,
+  stored wins). So the non-secret defaults are always present even against an unseeded db — the
+  migrate-time seed and the read-time merge are belt-and-suspenders. `getKey(name)` returns
+  `undefined` for an unset **or** empty/cleared value.
+- All adapters (`apify.ts`, `voyage.ts`, `anthropic.ts`) read keys via `getSettings()`/`getKey()`,
+  never from `process.env`.
 - If a **required** key for an action is missing, the API route returns a clear `409`/`412`
   ("Add your Apify token in Settings") and the UI routes the user to the Settings panel —
   scraping/embedding is disabled until keys are present.
@@ -702,8 +711,20 @@ Order within the layer (each independent, can be parallelized):
     *Test:* types compile under strict mode (type-level tests optional).
 
 ### Layer 2 — I/O adapters (mock all external calls in tests)
-12. **`db/db.ts` + `schema.sql`** — `better-sqlite3` singleton; `migrate()` runs `schema.sql`
-    idempotently. *Tests:* open in-memory db (`:memory:`), migrate, assert tables/indexes exist.
+12. **`db/db.ts` + `schema.sql`** — process-wide `better-sqlite3` singleton with three exports:
+    - `getDb(path?)` — returns the singleton. Called with **no arg** in app/repo code (opens at
+      `DB_PATH`, migrating on first open). Called **with an explicit path** (e.g. `':memory:'` in
+      tests) it closes any current instance and installs a fresh, migrated connection as the new
+      singleton — this doubles as the test-injection hook, so repos that call `getDb()` transparently
+      hit the test db (no dependency injection needed in repo signatures).
+    - `migrate(db?)` — runs `schema.sql` idempotently against `db` (or the singleton), then seeds
+      non-secret settings defaults via `seedSettingsDefaults(db)` (§6.4).
+    - `resetDb()` — closes and clears the singleton (call in `afterEach` for test isolation).
+
+    *Tests:* `migrate(new Database(':memory:'))` → assert all four tables + the load-bearing indexes
+    exist, the unique-url index rejects a dupe, migrate is idempotent, and the non-secret defaults
+    are seeded while secret keys stay absent. `getDb(':memory:')` returns a migrated singleton and a
+    second explicit call reopens a fresh db.
 13. **`db/posts.repo.ts`** — `insertPosts`, `findExistingIds/Urls`, `searchPosts(filters)`,
     `getCandidatesForClustering`, `getAuthorHistory(author_id)`, `updateXFactor`,
     `getUnembedded`, `setEmbedding`. *Tests:* against `:memory:` db with seeded rows — filters,
@@ -711,9 +732,17 @@ Order within the layer (each independent, can be parallelized):
 14. **`db/creators.repo.ts`** — CRUD + promote logic. *Tests:* insert, unique url, promote
     watch→core, delete, tag extraction.
 15. **`db/jobs.repo.ts`** — create/update/get scrape job.
-16. **`db/settings.repo.ts` + `lib/settings.ts`** — `getSettings()` (seed defaults on first
-    read, merge over stored rows), `setSettings(partial)`, `getKey(name)`. *Tests:* defaults
-    seeded; partial upsert; secret round-trip; missing required key reported.
+16. **`db/settings.repo.ts` + `lib/settings.ts`** —
+    - `settings.repo.ts` is thin row access: `readAllSettings()` → `SettingsMap`, `writeSettings(partial)`
+      (upsert only the given keys; empty string stored verbatim = "cleared"). Seeding is **not** here —
+      it lives in `db.ts`/`migrate()` (§6.4).
+    - `lib/settings.ts` is the accessor every adapter uses: `getSettings()` merges
+      `SETTINGS_DEFAULTS` under the stored rows (stored wins), `getKey(name)` returns `undefined` for
+      unset/empty, `setSettings(partial)` delegates to `writeSettings`, `readiness()` reports which
+      providers have their required key present.
+
+    *Tests:* defaults readable after migrate; partial upsert; clear-to-empty; secret round-trip;
+    defaults-under-stored merge; `getKey` treats empty as unset; `readiness` flips per key.
 17. **`apify.ts`** — `startActor`, `pollRun`, `getResults`, input builders. **Reads token +
     actor ids from settings.** *Tests:* msw-mock Apify HTTP; input builders are pure (assert
     shapes); poll loop resolves on SUCCEEDED, throws on FAILED; throws clearly when token unset.
