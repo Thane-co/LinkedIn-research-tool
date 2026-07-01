@@ -2,10 +2,13 @@
 // so the UI can poll a progress pill. Thin.
 
 import { NextResponse } from 'next/server'
+import { getJob } from '@/lib/db/jobs.repo'
 
 export async function GET(
   _req: Request,
-  _ctx: { params: { id: string } },
+  ctx: { params: { id: string } },
 ): Promise<NextResponse> {
-  return NextResponse.json({ error: 'Not implemented — see PRD §10.6' }, { status: 501 })
+  const job = getJob(ctx.params.id)
+  if (!job) return NextResponse.json({ error: 'job not found' }, { status: 404 })
+  return NextResponse.json(job)
 }

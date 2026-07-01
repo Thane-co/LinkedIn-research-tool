@@ -33,6 +33,9 @@ export interface RunScrapeOptions {
   creatorIds?: string[]
   timeframe: Timeframe
   market: string
+  // The API route creates the scrape_jobs row up front so it can return the id immediately (PRD
+  // §10.6) and then fire runScrape without awaiting. When absent, runScrape creates its own job.
+  jobId?: string
 }
 
 type RunSource = 'keyword' | 'creator'
@@ -121,12 +124,14 @@ function mapItems(items: (ApifyPost | ApifyTweet)[], platform: Platform, market:
  * The route calls this without awaiting (PRD §10.6), so it owns its own job status transitions.
  */
 export async function runScrape(opts: RunScrapeOptions): Promise<ScrapeStats> {
-  const job = createJob({
-    mode: opts.mode,
-    platforms: opts.platforms,
-    market: opts.market,
-    params: { timeframe: opts.timeframe, keywords: opts.keywords ?? [], creatorIds: opts.creatorIds ?? [] },
-  })
+  const jobId =
+    opts.jobId ??
+    createJob({
+      mode: opts.mode,
+      platforms: opts.platforms,
+      market: opts.market,
+      params: { timeframe: opts.timeframe, keywords: opts.keywords ?? [], creatorIds: opts.creatorIds ?? [] },
+    }).id
 
   try {
     const runs = planRuns(opts)
@@ -147,7 +152,7 @@ export async function runScrape(opts: RunScrapeOptions): Promise<ScrapeStats> {
     // Every needed scraper failed -> the whole run failed (PRD §12 step 21).
     if (runs.length > 0 && settled.every((r) => !r.ok)) {
       const error = settled.map((r) => (r.ok ? '' : r.error.message)).filter(Boolean).join('; ')
-      finishJob(job.id, { status: 'failed', error: error || 'all scrapers failed' })
+      finishJob(jobId, { status: 'failed', error: error || 'all scrapers failed' })
       return ZERO_STATS
     }
 
@@ -176,7 +181,7 @@ export async function runScrape(opts: RunScrapeOptions): Promise<ScrapeStats> {
       found_in_both: foundInBoth,
       inserted,
     }
-    finishJob(job.id, { status: 'succeeded', stats })
+    finishJob(jobId, { status: 'succeeded', stats })
 
     // --- non-fatal follow-on jobs (PRD §10.5 step 6): enrich, then recompute. Neither may bubble
     // up to fail the scrape (the job is already 'succeeded'). ------------------------------------
@@ -196,7 +201,7 @@ export async function runScrape(opts: RunScrapeOptions): Promise<ScrapeStats> {
 
     return stats
   } catch (err) {
-    finishJob(job.id, { status: 'failed', error: (err as Error).message })
+    finishJob(jobId, { status: 'failed', error: (err as Error).message })
     throw err
   }
 }

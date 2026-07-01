@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getDb, resetDb } from '@/lib/db/db'
 import { setSettings } from '@/lib/settings'
 import { embedImage, embedTexts } from '@/lib/voyage'
@@ -68,6 +68,19 @@ describe('embedTexts', () => {
     setSettings({ voyage_api_key: 'vk' })
     server.use(http.post(VOYAGE_TEXT_URL, () => new HttpResponse(null, { status: 500 })))
     await expect(embedTexts(['x'])).rejects.toThrow(/voyage/i)
+  })
+
+  it('aborts a hung embed batch via its per-fetch timeout instead of blocking forever', async () => {
+    vi.useFakeTimers()
+    try {
+      setSettings({ voyage_api_key: 'vk' })
+      server.use(http.post(VOYAGE_TEXT_URL, () => new Promise<Response>(() => {}))) // never resolves
+      const expectation = expect(embedTexts(['x'])).rejects.toThrow()
+      await vi.advanceTimersByTimeAsync(61_000) // past EMBED_TIMEOUT_MS (60 s)
+      await expectation
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

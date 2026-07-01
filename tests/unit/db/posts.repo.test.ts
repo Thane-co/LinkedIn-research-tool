@@ -5,6 +5,7 @@ import {
   findExistingIds,
   findExistingUrls,
   getAuthorHistory,
+  getAvailableAuthors,
   getCandidatesForClustering,
   getUnembedded,
   insertPosts,
@@ -12,6 +13,7 @@ import {
   setEmbedding,
   updateXFactor,
 } from '@/lib/db/posts.repo'
+import { upsertCreator } from '@/lib/db/creators.repo'
 import { vectorToBlob } from '@/lib/pure/vector-blob'
 import { makePostRow } from '@/tests/fixtures/posts'
 import type { PostRow } from '@/lib/types'
@@ -196,6 +198,37 @@ describe('clustering candidates + author history', () => {
       { id: 'both', embedding: tvec, image_embedding: ivec },
     ])
     expect(getCandidatesForClustering({}, true).map((c) => c.id)).toEqual(['both'])
+  })
+
+  it('getAvailableAuthors returns distinct authors with the creator avatar when known', () => {
+    seed([
+      { id: 'a', author_id: 'jane', author_name: 'Jane', platform: 'linkedin' },
+      { id: 'b', author_id: 'jane', author_name: 'Jane', platform: 'linkedin' },
+      { id: 'c', author_id: 'joe', author_name: 'Joe', platform: 'twitter' },
+      { id: 'd', author_id: null, author_name: 'Anon' }, // null author excluded
+    ])
+    upsertCreator({
+      platform: 'linkedin',
+      profile_url: 'https://li/in/jane',
+      author_id: 'jane',
+      avatar_url: 'https://img/jane.png',
+    })
+
+    const authors = getAvailableAuthors({})
+    expect(authors).toEqual([
+      { author_id: 'jane', author_name: 'Jane', avatar: 'https://img/jane.png' },
+      { author_id: 'joe', author_name: 'Joe', avatar: null },
+    ])
+  })
+
+  it('getAvailableAuthors applies non-author filters but ignores the author include-list', () => {
+    seed([
+      { id: 'a', author_id: 'jane', author_name: 'Jane', platform: 'linkedin' },
+      { id: 'c', author_id: 'joe', author_name: 'Joe', platform: 'twitter' },
+    ])
+    // platform filter narrows the list; the authors filter must NOT (so the dropdown stays full)
+    const li = getAvailableAuthors({ platform: 'linkedin', authors: ['joe'] })
+    expect(li.map((a) => a.author_id)).toEqual(['jane'])
   })
 
   it('getAuthorHistory returns the author rows ordered by posted_at', () => {

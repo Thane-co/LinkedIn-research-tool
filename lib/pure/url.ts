@@ -17,6 +17,14 @@ export function normalizeProfileUrl(url: string): string {
   return out
 }
 
+const LINKEDIN_SLUG_RE = /\/(?:in|company)\/([^/?#]+)/i
+
+/** Extract the profile slug from a LinkedIn /in/<slug> or /company/<slug> url, or null. */
+export function extractLinkedInSlug(url: string): string | null {
+  const match = url.match(LINKEDIN_SLUG_RE)
+  return match ? match[1]! : null
+}
+
 /** Extract a clean Twitter/X handle (no @) from a url or @handle input, or null. */
 export function extractTwitterHandle(input: string): string | null {
   if (!input) return null

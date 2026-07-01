@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { extractActivityId, extractTwitterHandle, normalizeProfileUrl } from '@/lib/pure/url'
+import {
+  extractActivityId,
+  extractLinkedInSlug,
+  extractTwitterHandle,
+  normalizeProfileUrl,
+} from '@/lib/pure/url'
 
 describe('extractActivityId', () => {
   it('extracts the id from an activity URN url', () => {
@@ -50,6 +55,25 @@ describe('normalizeProfileUrl', () => {
     expect(normalizeProfileUrl('https://www.linkedin.com/in/jane')).toBe(
       'https://www.linkedin.com/in/jane',
     )
+  })
+})
+
+describe('extractLinkedInSlug', () => {
+  it('extracts the slug from an /in/ profile url', () => {
+    expect(extractLinkedInSlug('https://www.linkedin.com/in/jane-doe')).toBe('jane-doe')
+  })
+
+  it('extracts the slug from a /company/ url', () => {
+    expect(extractLinkedInSlug('https://www.linkedin.com/company/acme-inc')).toBe('acme-inc')
+  })
+
+  it('ignores a trailing slash / query string (already normalized upstream, but be safe)', () => {
+    expect(extractLinkedInSlug('https://www.linkedin.com/in/jane/?x=1')).toBe('jane')
+  })
+
+  it('returns null when there is no /in/ or /company/ segment', () => {
+    expect(extractLinkedInSlug('https://www.linkedin.com/feed/')).toBeNull()
+    expect(extractLinkedInSlug('')).toBeNull()
   })
 })
 

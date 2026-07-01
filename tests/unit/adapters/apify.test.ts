@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getDb, resetDb } from '@/lib/db/db'
 import { setSettings } from '@/lib/settings'
 import {
@@ -97,6 +97,50 @@ describe('runActor', () => {
       ),
     )
     await expect(runActor('some/actor', {})).rejects.toThrow(/failed/i)
+  })
+
+  it('throws a timeout error (never fetches a partial dataset) when the run never reaches SUCCEEDED', async () => {
+    // Regression: exhausting the poll ceiling must FAIL the run, not fall through and fetch an
+    // incomplete/empty dataset that would be reported as a silently-wrong success (PRD §10.7).
+    vi.useFakeTimers()
+    try {
+      setSettings({ apify_api_token: 'tok' })
+      let itemsFetched = false
+      server.use(
+        http.post(`${BASE}/acts/:actor/runs`, () =>
+          HttpResponse.json({ data: { id: 'run1', defaultDatasetId: 'ds1', status: 'RUNNING' } }),
+        ),
+        http.get(`${BASE}/actor-runs/run1`, () =>
+          HttpResponse.json({ data: { id: 'run1', status: 'RUNNING', defaultDatasetId: 'ds1' } }),
+        ),
+        http.get(`${BASE}/datasets/ds1/items`, () => {
+          itemsFetched = true
+          return HttpResponse.json([])
+        }),
+      )
+      const expectation = expect(runActor('some/actor', {})).rejects.toThrow(/within|finish|timeout/i)
+      // Drive well past the ~10-min ceiling (400 polls x 1500 ms) to exhaust the loop.
+      await vi.advanceTimersByTimeAsync(400 * 1500 + 5000)
+      await expectation
+      expect(itemsFetched).toBe(false) // never reached the dataset fetch
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborts a hung request via its per-fetch timeout instead of blocking forever', async () => {
+    vi.useFakeTimers()
+    try {
+      setSettings({ apify_api_token: 'tok' })
+      server.use(
+        http.post(`${BASE}/acts/:actor/runs`, () => new Promise<Response>(() => {})), // never resolves
+      )
+      const expectation = expect(runActor('some/actor', {})).rejects.toThrow()
+      await vi.advanceTimersByTimeAsync(31_000) // past START_TIMEOUT_MS (30 s)
+      await expectation
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('encodes the actor id (slash -> tilde) in the run URL', async () => {

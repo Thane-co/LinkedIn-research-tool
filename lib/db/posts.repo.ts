@@ -192,6 +192,40 @@ export function getAuthorHistory(authorId: string): PostRow[] {
     .all(authorId) as PostRow[]
 }
 
+export interface AvailableAuthor {
+  author_id: string
+  author_name: string | null
+  avatar: string | null
+}
+
+/**
+ * Distinct authors for the creator-filter dropdown (PRD §11.1). Applies the current filters EXCEPT
+ * the author include-list (so selecting authors doesn't shrink the dropdown). The avatar is sourced
+ * from the creators table (posts carry no avatar column) by matching on author_id.
+ */
+export function getAvailableAuthors(filters: PostFilters): AvailableAuthor[] {
+  const db = getDb()
+  const { clause, params } = buildWhere({ ...filters, authors: undefined })
+  const where = clause ? `${clause} AND author_id IS NOT NULL` : 'WHERE author_id IS NOT NULL'
+
+  const rows = db
+    .prepare(`SELECT DISTINCT author_id, author_name FROM posts ${where} ORDER BY author_name`)
+    .all(...params) as { author_id: string; author_name: string | null }[]
+
+  const avatars = new Map<string, string | null>()
+  for (const c of db
+    .prepare('SELECT author_id, avatar_url FROM creators WHERE author_id IS NOT NULL')
+    .all() as { author_id: string; avatar_url: string | null }[]) {
+    avatars.set(c.author_id, c.avatar_url)
+  }
+
+  return rows.map((r) => ({
+    author_id: r.author_id,
+    author_name: r.author_name,
+    avatar: avatars.get(r.author_id) ?? null,
+  }))
+}
+
 export function updateXFactor(
   id: string,
   values: { weighted_score: number; creator_baseline: number | null; x_factor: number | null },

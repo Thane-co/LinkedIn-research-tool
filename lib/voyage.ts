@@ -9,6 +9,7 @@ import {
   VOYAGE_MULTIMODAL_URL,
   VOYAGE_TEXT_URL,
 } from '@/lib/config'
+import { fetchWithTimeout } from '@/lib/http'
 import { getKey } from '@/lib/settings'
 
 function requireKey(): string {
@@ -18,6 +19,8 @@ function requireKey(): string {
   }
   return key
 }
+
+const EMBED_TIMEOUT_MS = 60_000 // per-request timeout so a hung embed batch can't wedge enrich (PRD §10.7)
 
 const authHeaders = (key: string): Record<string, string> => ({
   authorization: `Bearer ${key}`,
@@ -31,11 +34,15 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
 
   for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
     const batch = texts.slice(i, i + EMBEDDING_BATCH_SIZE)
-    const res = await fetch(VOYAGE_TEXT_URL, {
-      method: 'POST',
-      headers: authHeaders(key),
-      body: JSON.stringify({ input: batch, model: TEXT_EMBEDDING_MODEL }),
-    })
+    const res = await fetchWithTimeout(
+      VOYAGE_TEXT_URL,
+      {
+        method: 'POST',
+        headers: authHeaders(key),
+        body: JSON.stringify({ input: batch, model: TEXT_EMBEDDING_MODEL }),
+      },
+      EMBED_TIMEOUT_MS,
+    )
     if (!res.ok) {
       throw new Error(`Voyage: text embedding batch failed (${res.status})`)
     }
@@ -50,14 +57,18 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
 /** Embed a single image url with voyage-multimodal-3. */
 export async function embedImage(url: string): Promise<number[]> {
   const key = requireKey()
-  const res = await fetch(VOYAGE_MULTIMODAL_URL, {
-    method: 'POST',
-    headers: authHeaders(key),
-    body: JSON.stringify({
-      inputs: [{ content: [{ type: 'image_url', image_url: url }] }],
-      model: IMAGE_EMBEDDING_MODEL,
-    }),
-  })
+  const res = await fetchWithTimeout(
+    VOYAGE_MULTIMODAL_URL,
+    {
+      method: 'POST',
+      headers: authHeaders(key),
+      body: JSON.stringify({
+        inputs: [{ content: [{ type: 'image_url', image_url: url }] }],
+        model: IMAGE_EMBEDDING_MODEL,
+      }),
+    },
+    EMBED_TIMEOUT_MS,
+  )
   if (!res.ok) {
     throw new Error(`Voyage: image embedding failed (${res.status})`)
   }
