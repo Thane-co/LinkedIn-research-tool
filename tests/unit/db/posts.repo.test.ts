@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { getDb, resetDb } from '@/lib/db/db'
 import {
+  countUnembedded,
   findExistingIds,
   findExistingUrls,
   getAuthorHistory,
@@ -227,6 +228,23 @@ describe('x-factor + embedding writes', () => {
     ])
     expect(getUnembedded(10).map((p) => p.id).sort()).toEqual(['a', 'c'])
     expect(getUnembedded(1)).toHaveLength(1)
+  })
+
+  it('getUnembedded with reEmbed includes already-embedded rows', () => {
+    seed([
+      { id: 'a', embedding: null },
+      { id: 'b', embedding: vectorToBlob([1, 0, 0, 0]) },
+    ])
+    expect(getUnembedded(10, { reEmbed: true }).map((p) => p.id).sort()).toEqual(['a', 'b'])
+  })
+
+  it('countUnembedded counts only rows with a null embedding', () => {
+    seed([
+      { id: 'a', embedding: null },
+      { id: 'b', embedding: vectorToBlob([1, 0, 0, 0]) },
+      { id: 'c', embedding: null },
+    ])
+    expect(countUnembedded()).toBe(2)
   })
 
   it('setEmbedding stores the text embedding and embedded_at', () => {

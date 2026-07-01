@@ -203,10 +203,19 @@ export function updateXFactor(
     .run(values.weighted_score, values.creator_baseline, values.x_factor, id)
 }
 
-export function getUnembedded(limit: number): PostRow[] {
+export function getUnembedded(limit: number, opts?: { reEmbed?: boolean }): PostRow[] {
+  // Default: only rows still missing a text embedding (never re-embed). With reEmbed, load every
+  // post up to the limit so a caller can refresh embeddings after adding image descriptions (§7.3).
+  const where = opts?.reEmbed ? '' : 'WHERE embedding IS NULL'
   return getDb()
-    .prepare(`SELECT ${POST_COLUMNS} FROM posts WHERE embedding IS NULL ORDER BY scraped_at ASC LIMIT ?`)
+    .prepare(`SELECT ${POST_COLUMNS} FROM posts ${where} ORDER BY scraped_at ASC LIMIT ?`)
     .all(limit) as PostRow[]
+}
+
+export function countUnembedded(): number {
+  return (
+    getDb().prepare('SELECT COUNT(*) AS n FROM posts WHERE embedding IS NULL').get() as { n: number }
+  ).n
 }
 
 export function setEmbedding(

@@ -533,6 +533,9 @@ is the user's own (BYO):
 > Do not split this into two actor ids. If the Apify token or a needed actor id is empty, skip
 > that scraper gracefully and surface a Settings prompt.
 
+> **Actor-id path encoding (gotcha):** in Apify REST paths the `/` in an actor id becomes `~`
+> (e.g. `acts/harvestapi~linkedin-post-search/runs`). Encode it or every run 404s.
+
 ### 10.2 Actor input builders (pure-ish; in `lib/apify.ts`)
 
 **LinkedIn keyword:**
@@ -552,6 +555,17 @@ is the user's own (BYO):
 **Twitter creator:**
 ```ts
 { twitterHandles: string[], maxItems: 50, sort: 'Latest', minimumFavorites?: number }
+```
+
+Builder function names (in `lib/apify.ts`): `buildLinkedInKeywordInput(keywords, timeframe)`,
+`buildLinkedInCreatorInput(profileUrls, timeframe)`, `buildTwitterKeywordInput(keywords, opts?)`,
+`buildTwitterCreatorInput(handles, opts?)`. They are pure — no I/O.
+
+**Timeframe → actor bounds** (the `<timeframe>` placeholders above; chosen to bound each scrape):
+```ts
+POSTED_LIMIT         = { '24h':'past-24h','3d':'past-week','week':'past-week',
+                         month:'past-month','3months':'past-month', custom:'any' }  // LinkedIn keyword
+MAX_POSTS_PER_PROFILE = { '24h':10,'3d':20,week:30,month:50,'3months':100, custom:50 } // LinkedIn creator
 ```
 
 ### 10.3 Field mapping (pure, `lib/pure/mappers.ts`)
@@ -726,12 +740,25 @@ Order within the layer (each independent, can be parallelized):
     are seeded while secret keys stay absent. `getDb(':memory:')` returns a migrated singleton and a
     second explicit call reopens a fresh db.
 13. **`db/posts.repo.ts`** — `insertPosts`, `findExistingIds/Urls`, `searchPosts(filters)`,
-    `getCandidatesForClustering`, `getAuthorHistory(author_id)`, `updateXFactor`,
-    `getUnembedded`, `setEmbedding`. *Tests:* against `:memory:` db with seeded rows — filters,
-    pagination/`hasMore`, ordering, x-factor update, dedup queries.
-14. **`db/creators.repo.ts`** — CRUD + promote logic. *Tests:* insert, unique url, promote
-    watch→core, delete, tag extraction.
-15. **`db/jobs.repo.ts`** — create/update/get scrape job.
+    `getCandidatesForClustering(filters, requireImageEmbedding)`, `getAuthorHistory(author_id)`,
+    `updateXFactor`, `getUnembedded`, `setEmbedding`. Notes: `getCandidatesForClustering` takes a
+    `requireImageEmbedding` flag (image grouping needs `image_embedding`; content clustering needs
+    only text `embedding`) and orders by `likes DESC` so the 400-cap keeps the most-engaged
+    candidates deterministically; it decodes BLOBs → `number[]` for the pure clustering fns.
+    `insertPosts` uses `INSERT OR IGNORE` and returns the count actually inserted. **`availableAuthors`
+    (§11.1) needs its own helper** (e.g. `getAvailableAuthors(filters)` → distinct
+    `author_id`+`author_name`+`avatar`) — add it here when building `/api/posts` (Layer 4).
+    *Tests:* against `:memory:` db with seeded rows — filters, pagination/`hasMore`, ordering,
+    x-factor update, dedup queries, clustering-candidate decode + image-required filter.
+14. **`db/creators.repo.ts`** — surface is `upsertCreator(new)` (insert, or promote watch→core and
+    fill newly-provided display fields when the `profile_url` already exists — never downgrades
+    core), `listCreators(filter?)` → `{ creators, tags }` (distinct tags across ALL creators),
+    `deleteCreator(id)`. Storage only — platform detection / url normalization / author_id
+    derivation happen at the route layer (§11.2) via `lib/pure/url.ts`. *Tests:* insert, unique url,
+    promote watch→core, no-downgrade, tag filter/extraction, delete.
+15. **`db/jobs.repo.ts`** — `createJob({mode, platforms, market, params})` (status `running`,
+    serializes `platforms`/`params` to JSON), `finishJob(id, {status:'succeeded', stats} | {status:'failed', error})`,
+    `getJob(id)` → row | null.
 16. **`db/settings.repo.ts` + `lib/settings.ts`** —
     - `settings.repo.ts` is thin row access: `readAllSettings()` → `SettingsMap`, `writeSettings(partial)`
       (upsert only the given keys; empty string stored verbatim = "cleared"). Seeding is **not** here —
@@ -743,13 +770,19 @@ Order within the layer (each independent, can be parallelized):
 
     *Tests:* defaults readable after migrate; partial upsert; clear-to-empty; secret round-trip;
     defaults-under-stored merge; `getKey` treats empty as unset; `readiness` flips per key.
-17. **`apify.ts`** — `startActor`, `pollRun`, `getResults`, input builders. **Reads token +
-    actor ids from settings.** *Tests:* msw-mock Apify HTTP; input builders are pure (assert
-    shapes); poll loop resolves on SUCCEEDED, throws on FAILED; throws clearly when token unset.
+17. **`apify.ts`** — the four input builders (§10.2) plus `runActor(actorId, input)`, which
+    encapsulates the full run: start → poll to SUCCEEDED → fetch dataset items. (No separate
+    `startActor`/`pollRun`/`getResults` public surface — the scrape job calls `runActor` once per
+    actor.) **Reads the token from settings** and encodes the actor id `/`→`~` (§10.1). *Tests:*
+    msw-mock Apify HTTP; input builders are pure (assert shapes); poll resolves on SUCCEEDED, throws
+    on FAILED; actor id is `~`-encoded in the run URL; throws clearly when the token is unset.
 18. **`voyage.ts`** — `embedTexts(strings[]) → number[][]`, `embedImage(url) → number[]`.
-    **Reads key from settings.** *Tests:* msw-mock Voyage; batch of 100; error per-batch
-    isolated; returns 1024-len vectors; throws clearly when key unset.
-19. **`anthropic.ts`** *(optional)* — `describeImage(url)`. Reads key from settings. Mocked.
+    **Reads key from settings.** Batches text at 100 and **reorders each batch's vectors by the
+    response `index`** before concatenating (preserves input order). *Tests:* msw-mock Voyage; batch
+    of 100; out-of-order response reordered; error per-batch throws; throws clearly when key unset.
+19. **`anthropic.ts`** *(optional)* — `describeImage(url) → string | null`. Reads key from settings.
+    **Contract:** returns `null` when the key is unset (feature disabled — the enrich job skips
+    description); **throws** on an HTTP error so the enrich job can log it non-fatally (§7.4). Mocked.
 
 ### Layer 3 — Orchestration jobs
 20. **`jobs/enrich.ts`** — `enrichPosts(limit, {reEmbed})`: load unembedded posts, build text,
