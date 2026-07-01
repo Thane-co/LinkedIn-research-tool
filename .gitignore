@@ -1,0 +1,30 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next
+/out
+
+# production
+/build
+
+# local SQLite database (holds the user's BYO keys + scraped data) — NEVER commit
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+research.db
+
+# env — only DB_PATH lives here, but never commit it
+.env
+.env.local
+.env*.local
+
+# test / coverage
+/coverage
+
+# misc
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
