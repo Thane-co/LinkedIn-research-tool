@@ -406,6 +406,54 @@ button[aria-pressed='true'] {
   width: 100%;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
+  display: block;
+}
+/* carousel: horizontal scroll strip */
+.post-card__carousel {
+  position: relative;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+}
+.post-card__carousel-item {
+  flex: 0 0 88%;
+  scroll-snap-align: start;
+}
+.post-card__media-count {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(17, 24, 39, 0.72);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+/* video + document: media wrapped in a link, with an overlay affordance */
+.post-card__media-link {
+  position: relative;
+  display: block;
+}
+.post-card__play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
+  color: #fff;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+  background: rgba(17, 24, 39, 0.28);
+  border-radius: var(--radius-sm);
+}
+.post-card__doc-badge {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  background: rgba(17, 24, 39, 0.72);
+  color: #fff;
 }
 .post-card__stats {
   display: flex;

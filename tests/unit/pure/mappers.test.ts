@@ -61,9 +61,31 @@ describe('mapApifyPostToRow (LinkedIn)', () => {
     expect(row.content).toBeNull()
   })
 
-  it('takes the first post image url, or null when there are none', () => {
+  it('takes the first post image url as the thumbnail, or null when there are none', () => {
     expect(mapApifyPostToRow(linkedInRaw(), 'ai').image_url).toBe('https://img/1.png')
     expect(mapApifyPostToRow(linkedInRaw({ postImages: [] }), 'ai').image_url).toBeNull()
+  })
+
+  it('serializes media JSON (image) and sets a document thumbnail + media', () => {
+    const img = mapApifyPostToRow(linkedInRaw(), 'ai')
+    expect(JSON.parse(img.media!)).toEqual({ type: 'image', images: ['https://img/1.png'] })
+
+    const docRaw = linkedInRaw({
+      postImages: [],
+      document: {
+        title: 'Deck',
+        transcribedDocumentUrl: 'https://doc/pdf',
+        totalPageCount: 12,
+        coverPages: [{ imageUrls: ['low', 'high'] }],
+      },
+    })
+    const doc = mapApifyPostToRow(docRaw, 'ai')
+    expect(doc.image_url).toBe('high') // thumbnail = document cover
+    expect(JSON.parse(doc.media!)).toEqual({ type: 'document', url: 'https://doc/pdf', title: 'Deck', pages: 12, cover: 'high' })
+  })
+
+  it('leaves media null when the post has none', () => {
+    expect(mapApifyPostToRow(linkedInRaw({ postImages: [] }), 'ai').media).toBeNull()
   })
 
   it('sets is_repost from repostedBy', () => {

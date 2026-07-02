@@ -26,11 +26,13 @@ CREATE TABLE IF NOT EXISTS posts (
   scraped_at        TEXT NOT NULL,             -- ISO-8601 UTC
   is_repost         INTEGER NOT NULL DEFAULT 0,
   scrape_source     TEXT,                      -- 'keyword' | 'creator' | 'both'
-  market            TEXT,                      -- free-text segment label, e.g. 'ai'
+  market            TEXT,                      -- market bucket this scrape ran under, e.g. 'ai'
+
+  media             TEXT,                      -- JSON PostMedia (image[]/video/document), null if none
 
   -- enrichment (nullable until enrich job runs)
   embedding         BLOB,                      -- Float32[1024] of content (+image desc)
-  image_url         TEXT,                      -- best post image url (may expire)
+  image_url         TEXT,                      -- PRIMARY THUMBNAIL: first image / video poster / doc cover
   image_description TEXT,                      -- optional Claude-vision description
   image_embedding   BLOB,                      -- Float32[1024] of image
   embedded_at       TEXT,                      -- ISO when text embedding written

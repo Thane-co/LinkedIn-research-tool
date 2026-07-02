@@ -23,14 +23,14 @@ export interface PostFilters {
 
 const POST_COLUMNS = `
   id, platform, url, content, author_name, author_url, author_id, author_type,
-  likes, shares, comments, posted_at, scraped_at, is_repost, scrape_source, market,
+  likes, shares, comments, posted_at, scraped_at, is_repost, scrape_source, market, media,
   embedding, image_url, image_description, image_embedding, embedded_at,
   weighted_score, creator_baseline, x_factor, raw_data
 `
 
 const INSERT_SQL = `INSERT OR IGNORE INTO posts (${POST_COLUMNS.replace(/\s+/g, ' ').trim()}) VALUES (
   @id, @platform, @url, @content, @author_name, @author_url, @author_id, @author_type,
-  @likes, @shares, @comments, @posted_at, @scraped_at, @is_repost, @scrape_source, @market,
+  @likes, @shares, @comments, @posted_at, @scraped_at, @is_repost, @scrape_source, @market, @media,
   @embedding, @image_url, @image_description, @image_embedding, @embedded_at,
   @weighted_score, @creator_baseline, @x_factor, @raw_data
 )`

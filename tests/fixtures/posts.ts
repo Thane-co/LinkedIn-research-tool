@@ -24,6 +24,7 @@ export function makePostRow(overrides: Partial<PostRow> = {}): PostRow {
     is_repost: 0,
     scrape_source: 'keyword',
     market: 'ai',
+    media: null,
     embedding: null,
     image_url: null,
     image_description: null,

@@ -5,6 +5,7 @@
 
 import { useState } from 'react'
 import { xFactorBadge } from '@/lib/pure/badge'
+import type { PostMedia } from '@/lib/types'
 
 export interface PostCardPost {
   id: string
@@ -20,8 +21,62 @@ export interface PostCardPost {
   x_factor: number | null
   scrape_source: 'keyword' | 'creator' | 'both' | null
   image_url: string | null
+  media?: PostMedia | null
   imageGroupSize?: number
 }
+
+/* eslint-disable @next/next/no-img-element */
+/** Render the post's media by type (§10.3.1); falls back to a single image_url image. */
+function PostMediaView({ post }: { post: PostCardPost }) {
+  const m = post.media
+  if (m?.type === 'image') {
+    if (m.images.length <= 1) {
+      return m.images[0] ? <img className="post-card__image" src={m.images[0]} alt="post media" /> : null
+    }
+    return (
+      <div className="post-card__carousel" data-testid="carousel">
+        {m.images.map((src, i) => (
+          <img key={i} className="post-card__image post-card__carousel-item" src={src} alt="post media" />
+        ))}
+        <span className="post-card__media-count">{m.images.length} images</span>
+      </div>
+    )
+  }
+  if (m?.type === 'video') {
+    return (
+      <a
+        className="post-card__media-link post-card__video"
+        data-testid="video-media"
+        href={post.url ?? m.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="play the video (opens the post)"
+      >
+        {m.poster && <img className="post-card__image" src={m.poster} alt="video thumbnail" />}
+        <span className="post-card__play" aria-hidden="true">
+          ▶
+        </span>
+      </a>
+    )
+  }
+  if (m?.type === 'document') {
+    return (
+      <a
+        className="post-card__media-link post-card__document"
+        data-testid="document-media"
+        href={m.url}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {m.cover && <img className="post-card__image" src={m.cover} alt={m.title ?? 'document'} />}
+        <span className="badge post-card__doc-badge">📄 {m.pages ?? '?'} pages</span>
+      </a>
+    )
+  }
+  // fallback: a legacy/thumbnail-only post
+  return post.image_url ? <img className="post-card__image" src={post.image_url} alt="post media" /> : null
+}
+/* eslint-enable @next/next/no-img-element */
 
 const TRUNCATE_AT = 280
 
@@ -64,10 +119,7 @@ export function PostCard({ post }: { post: PostCardPost }) {
         </span>
       </header>
 
-      {post.image_url && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img className="post-card__image" src={post.image_url} alt="" />
-      )}
+      <PostMediaView post={post} />
 
       <p className="post-card__content">{shown}</p>
       {isLong && (

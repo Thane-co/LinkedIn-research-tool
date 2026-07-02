@@ -11,7 +11,7 @@ import {
 } from '@/lib/db/posts.repo'
 import { findContentClusters } from '@/lib/pure/content-clusters'
 import { findSimilarImageGroups } from '@/lib/pure/image-groups'
-import type { PostRow, PostWithMedia, SortMode, Timeframe } from '@/lib/types'
+import type { PostMedia, PostRow, PostWithMedia, SortMode, Timeframe } from '@/lib/types'
 
 // Reads the live DB — never statically prerender/cache.
 export const dynamic = 'force-dynamic'
@@ -43,10 +43,20 @@ function parseFilters(sp: URLSearchParams): PostFilters {
   }
 }
 
-/** Strip BLOBs + raw_data so the JSON stays light and never leaks vectors. */
-function serializePost(row: PostRow): Omit<PostRow, 'embedding' | 'image_embedding' | 'raw_data'> {
-  const { embedding: _e, image_embedding: _i, raw_data: _r, ...rest } = row
-  return rest
+/** Strip BLOBs + raw_data; parse the `media` JSON so the client gets a structured object. */
+function serializePost(row: PostRow): Omit<PostRow, 'embedding' | 'image_embedding' | 'raw_data' | 'media'> & {
+  media: PostMedia | null
+} {
+  const { embedding: _e, image_embedding: _i, raw_data: _r, media, ...rest } = row
+  let parsed: PostMedia | null = null
+  if (media) {
+    try {
+      parsed = JSON.parse(media) as PostMedia
+    } catch {
+      parsed = null
+    }
+  }
+  return { ...rest, media: parsed }
 }
 
 /** Candidate post minus its heavy vectors, optionally annotated with its image-group size. */

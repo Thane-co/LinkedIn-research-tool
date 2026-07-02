@@ -5,6 +5,7 @@
 // Language filtering (isLikelyNonEnglish) is applied by the scrape job (Layer 3), not here — the
 // mapper is a pure, total mapping (map + throw-on-missing-id only).
 
+import { extractMedia } from '@/lib/pure/media'
 import { extractActivityId } from '@/lib/pure/url'
 import type { ApifyPost, ApifyTweet, PostRow } from '@/lib/types'
 
@@ -28,7 +29,7 @@ export function mapApifyPostToRow(raw: ApifyPost, market: string): PostRow {
   }
 
   const eng = raw.engagement ?? undefined
-  const imageUrl = raw.postImages?.[0]?.url ?? null
+  const { media, thumbnail } = extractMedia(raw)
 
   return {
     id,
@@ -47,7 +48,8 @@ export function mapApifyPostToRow(raw: ApifyPost, market: string): PostRow {
     is_repost: raw.repostedBy ? 1 : 0,
     scrape_source: null,
     market,
-    image_url: imageUrl,
+    media: media ? JSON.stringify(media) : null,
+    image_url: thumbnail,
     raw_data: JSON.stringify(raw),
     ...blankEnrichment,
   }
@@ -77,6 +79,7 @@ export function mapApifyTweetToRow(raw: ApifyTweet, market: string): PostRow {
     is_repost: raw.isRetweet ? 1 : 0,
     scrape_source: null,
     market,
+    media: null, // Twitter media mapping pending a real tweet payload (PRD §10.3)
     image_url: null,
     raw_data: JSON.stringify(raw),
     ...blankEnrichment,

@@ -28,10 +28,23 @@ export function seedSettingsDefaults(db: Database.Database): void {
   }
 }
 
+// Additive column migrations for databases created before a column existed. `CREATE TABLE IF NOT
+// EXISTS` never alters an existing table, so new nullable columns are added here idempotently.
+const ADDITIVE_COLUMNS: { table: string; column: string; type: string }[] = [
+  { table: 'posts', column: 'media', type: 'TEXT' }, // §10.3.1 post media
+]
+
 /** Run the schema DDL idempotently against the given (or singleton) connection, then seed defaults. */
 export function migrate(db?: Database.Database): void {
   const target = db ?? getDb()
   target.exec(schemaSql)
+  for (const { table, column, type } of ADDITIVE_COLUMNS) {
+    try {
+      target.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`)
+    } catch {
+      // column already exists — the fresh schema created it, or a prior migrate added it
+    }
+  }
   seedSettingsDefaults(target)
 }
 

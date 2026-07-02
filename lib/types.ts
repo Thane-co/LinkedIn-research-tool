@@ -31,8 +31,10 @@ export interface PostRow {
   scrape_source: ScrapeSource | null
   market: string | null
 
+  media: string | null // JSON PostMedia (§10.3.1), null when the post has no media
+
   embedding: Buffer | null
-  image_url: string | null
+  image_url: string | null // PRIMARY THUMBNAIL: first image / video poster / doc cover
   image_description: string | null
   image_embedding: Buffer | null
   embedded_at: string | null
@@ -99,8 +101,22 @@ export interface ApifyPost {
   engagement?: { likes?: number; comments?: number; shares?: number } | null
   repostedBy?: unknown
   postImages?: { url?: string }[]
+  postVideo?: { videoUrl?: string; thumbnailUrl?: string } | null
+  document?: {
+    title?: string
+    transcribedDocumentUrl?: string
+    totalPageCount?: number
+    coverPages?: { imageUrls?: string[] }[]
+  } | null
   [key: string]: unknown
 }
+
+// --- Post media (PRD §10.3.1) ----------------------------------------------
+// Captured at map time from the raw item; stored as JSON in posts.media, drives card rendering.
+export type PostMedia =
+  | { type: 'image'; images: string[] }
+  | { type: 'video'; url: string; poster: string | null }
+  | { type: 'document'; url: string; title: string | null; pages: number | null; cover: string | null }
 
 export interface ApifyTweet {
   id: string
