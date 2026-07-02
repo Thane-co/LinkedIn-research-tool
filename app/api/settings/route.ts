@@ -6,6 +6,9 @@ import { NextResponse } from 'next/server'
 import { SECRET_SETTING_KEYS } from '@/lib/config'
 import { getKey, getSettings, readiness, setSettings } from '@/lib/settings'
 
+// This GET reads the live DB (readiness); opt out of Next's static prerender so it is never cached.
+export const dynamic = 'force-dynamic'
+
 /** Merged settings with every secret key masked to 'set'/'unset' (never the raw value). */
 function maskedView(): { settings: Record<string, string>; ready: ReturnType<typeof readiness> } {
   const settings: Record<string, string> = { ...getSettings() }

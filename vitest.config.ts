@@ -21,6 +21,8 @@ export default defineConfig({
   resolve: {
     alias: { '@': path.resolve(__dirname, '.') },
   },
+  // Automatic JSX runtime so component tests don't need `React` in scope (matches Next's transform).
+  esbuild: { jsx: 'automatic' },
   test: {
     environment: 'node',
     globals: true,

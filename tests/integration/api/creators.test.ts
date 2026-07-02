@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DELETE, GET, POST } from '@/app/api/creators/route'
+import { DELETE, GET, PATCH, POST } from '@/app/api/creators/route'
 import { getDb, resetDb } from '@/lib/db/db'
 import { insertPosts } from '@/lib/db/posts.repo'
 import { makePostRow } from '@/tests/fixtures/posts'
@@ -72,6 +72,30 @@ describe('GET /api/creators', () => {
 
     const tagged = await (await GET(new Request('http://localhost/api/creators?tag=news'))).json()
     expect(tagged.creators.map((c: { author_id: string }) => c.author_id)).toEqual(['joe'])
+  })
+})
+
+describe('PATCH /api/creators', () => {
+  const patch = (body: unknown): Request =>
+    new Request('http://localhost/api/creators', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+      headers: { 'content-type': 'application/json' },
+    })
+
+  it('demotes a core creator to watch', async () => {
+    const { creators } = await (
+      await POST(postJson({ input: 'https://www.linkedin.com/in/jane-doe', tier: 'core' }))
+    ).json()
+    const id = creators[0].id
+    const res = await PATCH(patch({ id, tier: 'watch' }))
+    expect(res.status).toBe(200)
+    const { creators: after } = await res.json()
+    expect(after.find((c: { id: string }) => c.id === id).tier).toBe('watch')
+  })
+
+  it('400s on a bad tier', async () => {
+    expect((await PATCH(patch({ id: 'x', tier: 'bogus' }))).status).toBe(400)
   })
 })
 

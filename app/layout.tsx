@@ -1,4 +1,5 @@
-// Layer 5 — root layout (Next.js App Router).
+// Layer 5 — root layout (Next.js App Router). Global styles (design system, PRD §11.7) load here.
+import './globals.css'
 import type { ReactNode } from 'react'
 
 export const metadata = {
