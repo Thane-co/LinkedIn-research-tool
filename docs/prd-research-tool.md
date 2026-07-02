@@ -759,6 +759,13 @@ All routes return `NextResponse.json()`. **Every route handler that reads or wri
 default, which would freeze DB reads (e.g. settings readiness) at build time. Routes stay thin: parse
 → call a repo/job/pure function → return JSON.
 
+**CSRF guard (local, no-auth server).** Because the app runs unauthenticated on localhost, a site the
+user is visiting could try to drive-by a state change. **Every mutating handler (POST/PUT/DELETE)
+calls `rejectCrossOrigin(req)` first** (`lib/api-guard.ts`) and returns its **403** when the request's
+`Origin` header is present and isn't the local app; requests with no `Origin` (same-origin, tests)
+pass. This matters most for `PUT /api/settings` (can overwrite keys) and `POST /api/scrape` (burns
+API credits). *Tested per route* + a helper unit test (cross-origin → 403, local/absent → allowed).
+
 ### 11.1 `GET /api/posts` — the main read endpoint
 Query params:
 ```
@@ -899,7 +906,9 @@ Footer: engagement **👍 likes · 💬 comments · 🔁 shares** on the left, a
 the **scrape-source badge** (`both`/`creator`/`keyword`) + **x-factor badge** (≥2× green 🔥 / 0.5–2×
 gray / <0.5× red / hidden when null). No selection checkbox and no add-to-creators button — creators
 are managed on the Scrape Settings screen. (Group membership is shown by the group panel, not on the
-card — see §11.5.)
+card — see §11.5.) All hrefs (the 🔗 link + media links) run the scraped url through **`safeHref`**
+(`lib/pure/url.ts`) — only `http(s)` is rendered, so an injected `javascript:`/`data:` url can't
+become a clickable link.
 
 ### Screen B — Scrape Settings
 
@@ -1233,6 +1242,11 @@ each component renders its `role="alert"` error state when its request 500s.
 ---
 
 ## 14. Environment / config
+
+**The server binds to loopback only.** `npm run dev`/`start` pass `-H 127.0.0.1`, so the
+unauthenticated app is reachable only from this machine — never exposed to the LAN (where anyone
+could read scraped data, trigger credit-burning scrapes, or overwrite keys). Combined with the §11
+CSRF guard, the two together close "someone else's code talks to your local server."
 
 **No API keys live in env or in the shipped repo.** All credentials are bring-your-own,
 entered by each user in the Settings UI and stored in the local `settings` table (§6.4).

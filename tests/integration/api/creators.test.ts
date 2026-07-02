@@ -15,6 +15,15 @@ const postJson = (body: unknown): Request =>
   })
 
 describe('POST /api/creators', () => {
+  it('refuses a cross-origin request with 403 (CSRF guard)', async () => {
+    const req = new Request('http://localhost/api/creators', {
+      method: 'POST',
+      headers: { origin: 'https://evil.example.com', 'content-type': 'application/json' },
+      body: JSON.stringify({ inputs: ['@x'] }),
+    })
+    expect((await POST(req)).status).toBe(403)
+  })
+
   it('adds a LinkedIn creator: detects platform, normalizes url, derives author_id', async () => {
     const res = await POST(postJson({ input: 'https://www.linkedin.com/in/jane-doe?miniProfileUrn=x' }))
     expect(res.status).toBe(200)

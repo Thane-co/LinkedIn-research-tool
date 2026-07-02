@@ -3,6 +3,7 @@
 // lib/pure/url.ts; storage + promote-on-re-add live in the creators repo.
 
 import { NextResponse } from 'next/server'
+import { rejectCrossOrigin } from '@/lib/api-guard'
 import { deleteCreator, listCreators, upsertCreator } from '@/lib/db/creators.repo'
 import { getAuthorHistory } from '@/lib/db/posts.repo'
 import { extractLinkedInSlug, extractTwitterHandle, normalizeProfileUrl } from '@/lib/pure/url'
@@ -44,6 +45,8 @@ export async function GET(req: Request): Promise<NextResponse> {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
+  const blocked = rejectCrossOrigin(req)
+  if (blocked) return blocked
   const body = (await req.json()) as {
     input?: string
     inputs?: string[]
@@ -82,6 +85,8 @@ export async function POST(req: Request): Promise<NextResponse> {
 }
 
 export async function DELETE(req: Request): Promise<NextResponse> {
+  const blocked = rejectCrossOrigin(req)
+  if (blocked) return blocked
   const id = new URL(req.url).searchParams.get('id')
   if (!id) return NextResponse.json({ error: 'id query param required' }, { status: 400 })
   deleteCreator(id)

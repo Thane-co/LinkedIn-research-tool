@@ -15,6 +15,15 @@ const post = (body: unknown): Request =>
   })
 
 describe('/api/keywords', () => {
+  it('refuses a cross-origin POST with 403 (CSRF guard)', async () => {
+    const req = new Request('http://localhost/api/keywords', {
+      method: 'POST',
+      headers: { origin: 'https://evil.example.com', 'content-type': 'application/json' },
+      body: JSON.stringify({ market: 'ai', term: 'agents' }),
+    })
+    expect((await POST(req)).status).toBe(403)
+  })
+
   it('GET returns keywords grouped by market', async () => {
     addKeyword('ai', 'llm')
     addKeyword('linkedin', 'claude code')

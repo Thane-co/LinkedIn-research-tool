@@ -25,6 +25,15 @@ const postScrape = (body: unknown): Request =>
   })
 
 describe('POST /api/scrape', () => {
+  it('refuses a cross-origin request with 403 (CSRF guard)', async () => {
+    const req = new Request('http://localhost/api/scrape', {
+      method: 'POST',
+      headers: { origin: 'https://evil.example.com', 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'keyword', keywords: ['ai'] }),
+    })
+    expect((await POST(req)).status).toBe(403)
+  })
+
   it('412s with the missing keys when required settings are absent', async () => {
     const res = await POST(postScrape({ mode: 'keyword', keywords: ['ai'] }))
     expect(res.status).toBe(412)

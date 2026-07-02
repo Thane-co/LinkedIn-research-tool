@@ -4,7 +4,27 @@ import {
   extractLinkedInSlug,
   extractTwitterHandle,
   normalizeProfileUrl,
+  safeHref,
 } from '@/lib/pure/url'
+
+describe('safeHref', () => {
+  it('passes http and https urls through unchanged', () => {
+    expect(safeHref('https://example.com/x')).toBe('https://example.com/x')
+    expect(safeHref('http://example.com')).toBe('http://example.com')
+  })
+
+  it('rejects javascript:/data:/other non-http(s) schemes (→ undefined)', () => {
+    expect(safeHref('javascript:alert(1)')).toBeUndefined()
+    expect(safeHref('data:text/html,<script>1</script>')).toBeUndefined()
+    expect(safeHref('file:///etc/passwd')).toBeUndefined()
+  })
+
+  it('rejects null / undefined / unparseable input', () => {
+    expect(safeHref(null)).toBeUndefined()
+    expect(safeHref(undefined)).toBeUndefined()
+    expect(safeHref('not a url')).toBeUndefined()
+  })
+})
 
 describe('extractActivityId', () => {
   it('extracts the id from an activity URN url', () => {

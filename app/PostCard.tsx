@@ -5,6 +5,7 @@
 
 import { useState } from 'react'
 import { xFactorBadge } from '@/lib/pure/badge'
+import { safeHref } from '@/lib/pure/url'
 import type { PostMedia } from '@/lib/types'
 
 export interface PostCardPost {
@@ -46,7 +47,7 @@ function PostMediaView({ post }: { post: PostCardPost }) {
       <a
         className="post-card__media-link post-card__video"
         data-testid="video-media"
-        href={post.url ?? m.url}
+        href={safeHref(post.url ?? m.url)}
         target="_blank"
         rel="noopener noreferrer"
         aria-label="play the video (opens the post)"
@@ -63,7 +64,7 @@ function PostMediaView({ post }: { post: PostCardPost }) {
       <a
         className="post-card__media-link post-card__document"
         data-testid="document-media"
-        href={m.url}
+        href={safeHref(m.url)}
         target="_blank"
         rel="noopener noreferrer"
       >
@@ -102,10 +103,10 @@ export function PostCard({ post }: { post: PostCardPost }) {
         <span className="post-card__author">{post.author_name ?? 'Unknown'}</span>
         {post.posted_at && <time className="post-card__date">{formatDate(post.posted_at)}</time>}
         <span className="post-card__head-right">
-          {post.url && (
+          {safeHref(post.url) && (
             <a
               className="post-card__link"
-              href={post.url}
+              href={safeHref(post.url)}
               target="_blank"
               rel="noopener noreferrer"
               aria-label="open the original post"

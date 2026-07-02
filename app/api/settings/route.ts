@@ -4,6 +4,7 @@
 
 import { NextResponse } from 'next/server'
 import { SECRET_SETTING_KEYS } from '@/lib/config'
+import { rejectCrossOrigin } from '@/lib/api-guard'
 import { getKey, getSettings, readiness, setSettings } from '@/lib/settings'
 
 // This GET reads the live DB (readiness); opt out of Next's static prerender so it is never cached.
@@ -21,6 +22,8 @@ export async function GET(_req: Request): Promise<NextResponse> {
 }
 
 export async function PUT(req: Request): Promise<NextResponse> {
+  const blocked = rejectCrossOrigin(req)
+  if (blocked) return blocked
   const body = (await req.json()) as Record<string, unknown>
   const partial: Record<string, string> = {}
   for (const [key, value] of Object.entries(body)) {

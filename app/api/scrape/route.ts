@@ -4,11 +4,14 @@
 
 import { NextResponse } from 'next/server'
 import { runScrape } from '@/jobs/scrape'
+import { rejectCrossOrigin } from '@/lib/api-guard'
 import { createJob } from '@/lib/db/jobs.repo'
 import { getKey, getSettings } from '@/lib/settings'
 import type { Platform, ScrapeMode, Timeframe } from '@/lib/types'
 
 export async function POST(req: Request): Promise<NextResponse> {
+  const blocked = rejectCrossOrigin(req)
+  if (blocked) return blocked
   // Required BYO keys: Apify to scrape, Voyage for the follow-on enrich (PRD §11.3).
   const needs: string[] = []
   if (!getKey('apify_api_token')) needs.push('apify_api_token')

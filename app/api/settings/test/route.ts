@@ -4,6 +4,7 @@
 
 import { NextResponse } from 'next/server'
 import { IMAGE_DESCRIPTION_MODEL, TEXT_EMBEDDING_MODEL, VOYAGE_TEXT_URL } from '@/lib/config'
+import { rejectCrossOrigin } from '@/lib/api-guard'
 import { getKey } from '@/lib/settings'
 
 type ProbeResult = { ok: boolean; error?: string }
@@ -52,7 +53,9 @@ async function testAnthropic(): Promise<ProbeResult> {
   )
 }
 
-export async function POST(_req: Request): Promise<NextResponse> {
+export async function POST(req: Request): Promise<NextResponse> {
+  const blocked = rejectCrossOrigin(req)
+  if (blocked) return blocked
   const [apify, voyage, anthropic] = await Promise.all([testApify(), testVoyage(), testAnthropic()])
   return NextResponse.json({ apify, voyage, anthropic })
 }

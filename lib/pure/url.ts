@@ -3,6 +3,20 @@
 
 const ACTIVITY_RE = /(?:activity|ugcPost|share)[-:](\d+)/
 
+/**
+ * Return `url` only if it is a safe `http(s)` link, else `undefined`. Guards a scraped/injected
+ * `javascript:` or `data:` value from becoming a clickable href (React does not block those schemes).
+ */
+export function safeHref(url: string | null | undefined): string | undefined {
+  if (!url) return undefined
+  try {
+    const { protocol } = new URL(url)
+    return protocol === 'http:' || protocol === 'https:' ? url : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Extract the numeric activity/ugcPost/share id from a LinkedIn post URL, or null. */
 export function extractActivityId(url: string | null | undefined): string | null {
   if (!url) return null

@@ -40,6 +40,11 @@ describe('PostCard', () => {
     expect(screen.queryByRole('button', { name: /add .* to creators/i })).not.toBeInTheDocument()
   })
 
+  it('does not render an unsafe (javascript:) post url as a link', () => {
+    render(<PostCard post={makePost({ url: 'javascript:alert(1)' })} />)
+    expect(screen.queryByRole('link', { name: /open the original post/i })).not.toBeInTheDocument()
+  })
+
   it('shows a green 🔥 x-factor badge for a viral post and hides it when null', () => {
     const { rerender } = render(<PostCard post={makePost({ x_factor: 3 })} />)
     const badge = screen.getByTestId('xfactor-badge')

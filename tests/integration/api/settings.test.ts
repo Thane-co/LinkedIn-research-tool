@@ -41,6 +41,15 @@ describe('GET /api/settings', () => {
 })
 
 describe('PUT /api/settings', () => {
+  it('refuses a cross-origin PUT with 403 (CSRF guard — keys can be overwritten here)', async () => {
+    const req = new Request('http://localhost/api/settings', {
+      method: 'PUT',
+      headers: { origin: 'https://evil.example.com', 'content-type': 'application/json' },
+      body: JSON.stringify({ apify_api_token: 'stolen' }),
+    })
+    expect((await PUT(req)).status).toBe(403)
+  })
+
   it('trims values and writes only the provided keys', async () => {
     const res = await PUT(jsonReq('PUT', { apify_api_token: '  spacey  ' }))
     expect(res.status).toBe(200)
