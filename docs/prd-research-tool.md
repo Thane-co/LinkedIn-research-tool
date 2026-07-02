@@ -234,7 +234,7 @@ CREATE TABLE IF NOT EXISTS posts (
   scraped_at        TEXT NOT NULL,             -- ISO-8601 UTC
   is_repost         INTEGER NOT NULL DEFAULT 0,
   scrape_source     TEXT,                      -- 'keyword' | 'creator' | 'both'
-  market            TEXT,                      -- free-text segment label, e.g. 'ai'
+  market            TEXT,                      -- market bucket this scrape ran under (§6.5), e.g. 'ai'
 
   -- enrichment (nullable until enrich job runs)
   embedding         BLOB,                      -- Float32[1024] of content (+image desc)
@@ -365,6 +365,43 @@ Rules:
 - **At-rest note:** keys are stored as plaintext in the local SQLite file (acceptable for a
   single-user local tool — same trust boundary as the user's own disk). OS-keychain storage
   is a possible v1.1 hardening, **not** required for v1. Never log key values.
+
+### 6.5 `keywords` — saved keyword sets per market (Layer 6, §11.6)
+
+The keyword sets the Manual-Scrape "keyword" mode pulls, grouped by **market**. A *market* is just a
+user-defined label (e.g. `ai`, `linkedin`, `solution-engineer`); the set of markets is the distinct
+`market` column here, seeded with `default_market` (§6.4). A scrape "for market M" pulls M's terms and
+**stamps every inserted post with `posts.market = M`** — so `posts.market` records which market bucket
+a post was scraped under, and `GET /api/posts?market=M` filters on it.
+
+```sql
+CREATE TABLE IF NOT EXISTS keywords (
+  id         TEXT PRIMARY KEY,            -- crypto.randomUUID()
+  market     TEXT NOT NULL,               -- user-defined label; the market set = distinct values here
+  term       TEXT NOT NULL,               -- the keyword/phrase
+  created_at TEXT NOT NULL,               -- ISO-8601 UTC
+  UNIQUE(market, term)
+);
+CREATE INDEX IF NOT EXISTS keywords_market_idx ON keywords(market);
+```
+
+> **Seeding:** the `keywords` table starts **empty**; only the `default_market` label (§6.4) is
+> present as the initial market shown in the editor. Users add their own terms — no keyword set is
+> bundled or opinionated.
+
+### 6.6 `saved_searches` — filter presets (Layer 6, §11.6)
+
+A named snapshot of the Search filter row. **Not** a stored result set (no "trends" artefact —
+N1/N3 still hold); selecting one just repopulates the filters and re-queries live.
+
+```sql
+CREATE TABLE IF NOT EXISTS saved_searches (
+  id         TEXT PRIMARY KEY,            -- crypto.randomUUID()
+  name       TEXT NOT NULL,
+  params     TEXT NOT NULL,               -- JSON.stringify of the filter state
+  created_at TEXT NOT NULL                -- ISO-8601 UTC
+);
+```
 
 ---
 
@@ -689,6 +726,7 @@ minLikes=int  minShares=int              (engagement floors; default 0)
 minXFactor=float                          (x_factor >= value; null x_factor excluded)
 timeframe=24h|3d|week|month|3months|custom
 dateFrom=ISO  dateTo=ISO                  (when timeframe=custom)
+market=string                             (posts.market bucket; greenlit §11.6, §6.5)
 sort=recent|likes|xfactor                 (default recent)
 groupByImage=true|false                   (default false)
 discoverTrends=true|false                 (default false)
@@ -747,6 +785,158 @@ or `404` when the id is unknown.
   (Apify: `GET /v2/users/me`; Voyage: 1-token embed; Anthropic: 1-token message) and returns
   `{ apify: { ok, error? }, voyage: {…}, anthropic: {…} }`. A provider with no key is reported
   `{ ok:false, error }` without a network call, so onboarding can show green/red without a full scrape.
+
+---
+
+## 11.5 UI wireframes (v1 target)
+
+Two screens: **Search** (the default dashboard) and **Scrape Settings** (creators + keywords + keys
++ manual scrape + history). These wireframes are the source of truth for layout; match them.
+
+### Screen A — Search
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│ Search Posts                              [▦ grid][≣ list]  [ Group by image ] [ Discover trends ] │
+│ Showing 20 of 24 matching posts                                                             │
+├──────────────────────────────────────────────────────────────────────────────────────────┤
+│ [Keywords… ] [Creators (516) ▾] [♥ 750] [↗ 0] [✕ 0] [Newest ▾] [Last week ▾] [Framework ▾] │
+│                                                              [LinkedIn ✕] [   Search   ]      │
+│ Saved searches (2) ▾                                                                         │
+├──────────────────────────────────────────────────────────────────────────────────────────┤
+│ ┌─ card ───────────────┐  ┌─ card ───────────────┐  ┌─ card ───────────────┐               │
+│ │ ☐ (A) Alex Wang    + │  │ ☐ (C) Chris Donnelly + │  │ ☐ (N) Natan Mohart + │               │
+│ │      Jun 26, 2026    │  │      Jun 26, 2026    │  │      Jun 26, 2026    │               │
+│ │  content …see more   │  │  content …see more   │  │  content …see more   │               │
+│ │  [    image    ]     │  │  [    image    ]     │  │  [    image    ]     │               │
+│ │  👍1,710 💬92 🔁86    │  │  👍984 💬273 🔁106    │  │  👍1,143 💬159 🔁199  │               │
+│ │  0.8×  [both]    in  │  │  1.2×  [creator] in  │  │        [keyword] in  │               │
+│ └──────────────────────┘  └──────────────────────┘  └──────────────────────┘               │
+│  … responsive masonry grid; "list" view is the same cards stacked full-width …               │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Header controls (right): **grid/list** view toggle; **Group by image** and **Discover trends** are
+toggle buttons that switch `/api/posts` into grouping mode (§11.1) — active state is visually pressed.
+Sub-header: **"Showing {posts.length} of {total} matching posts"** (grouping mode shows group counts).
+
+Filter row → `/api/posts` params (§11.1):
+| Control | Param |
+|---|---|
+| Keywords… (chips) | `keywords` |
+| Creators (N) ▾ (multi-select, count = # selected/available) | `authors` |
+| ♥ number | `minLikes` |
+| ↗ number | `minShares` |
+| ✕ number | `minXFactor` |
+| Newest ▾ (Newest / Most liked / Highest x-factor) | `sort` |
+| Last week ▾ (24h/3d/week/month/3months/custom) | `timeframe` (+ `dateFrom`/`dateTo`) |
+| Framework ▾ (market) | `market` *(greenlit, §11.6)* |
+| LinkedIn ✕ (platform pill; ✕ clears to All) | `platform` |
+| Search | re-fetch |
+| Saved searches (2) ▾ | *(greenlit, §11.6)* |
+
+Post card: selection **checkbox** + **＋** (add this author to creators) top corners; avatar + author +
+**posted date**; content with **…see more** expand; optional image; engagement row **👍 likes · 💬
+comments · 🔁 shares**; **x-factor badge** (≥2× green 🔥 / 0.5–2× gray / <0.5× red / hidden when null);
+**scrape-source badge** (`both`/`creator`/`keyword`); **platform** icon. In image-group view each card
+also shows its group-size indicator.
+
+### Screen B — Scrape Settings
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│ Scrape Settings                                                                             │
+│ Manage your API keys, creator list, and keywords.                                           │
+├─ API keys (bring-your-own; stored locally) ────────────────────────────────────────────────┤
+│ Apify API token  [•••• saved]      Voyage API key [•••• saved]   Anthropic key [ not set ]  │
+│ Actor ids:  keyword [harvestapi/…]  profile [harvestapi/…]  tweet [apidojo/…]               │
+│ [ Save ]  [ Test connection ]     ● apify ok   ● voyage ok   ○ anthropic (not set)          │
+├─ Core Creators   48 — pulled every scrape ───────────────────────────────  [ Bulk import ] ┤
+│ [Profile URL / @handle ........] [Name (optional)] [Tags: ai, founder] [Core ▾] [ Add ]     │
+│ ─────────────────────────────────────────────────────────────────────────────────────────  │
+│  (av) Luna Chen        in/luna-chen     [linkedin-growth][lead-magnets] edit   Demote  Remove│
+│  (av) Aakash Gupta     in/aagupta       — edit                                 Demote  Remove│
+│  …                                                                                          │
+├─ Watch List   68 creators — not auto-scraped                                            ▾ ──┤
+├─ Keywords   (per market — used to prefill scrapes)                                          ┤
+│  AI            [artificial intelligence ✕][llm ✕][ai ✕][agent ✕]…  + Add keyword   Remove market │
+│  LINKEDIN      [claude code content creation ✕][claude code marketing ✕]  + Add keyword          │
+│  SOLUTION ENG  [solution engineer ✕][sales engineer ✕]  + Add keyword                            │
+│  + Add market                                                                               │
+├─ Manual Scrape ──────────────────────────────────────────────  Last run: 6/19 1:38 PM ─────┤
+│  Source [Creators + Keywords ▾]  Platform [All ▾]  Time frame [Last week ▾]  Market [All ▾]  │
+│  [ Run scrape now ]     48 core creators + 19 keywords · 1 week                              │
+├─ Scrape History   (last 20 runs) ───────────────────────────────────────────────────────────┤
+│  Date             Source    Platform  Keywords                    Fetched   New              │
+│  Jun 19 01:38 PM  Keywords   LinkedIn  solution engineer, …        385       385             │
+│  May 29 01:38 AM  Both       All       artificial intelligence, … 3181      3172             │
+│  …                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Mapping: **API keys** → §11.4 (`SettingsPanel`). **Core/Watch creators** → §11.2 (`tier` = `core`/
+`watch`; **Demote** = explicit `core→watch`, allowed because it's explicit, unlike a silent downgrade;
+**Bulk import** = paste many, one per line). **Manual Scrape** → §11.3 `POST /api/scrape`; the summary
+line reflects the resolved run (`{coreCount} core creators + {keywordCount} keywords · {timeframe}`).
+
+> **No scheduler (unchanged, N3/local rule):** there is **no cron/auto-scrape**. Core creators are
+> labelled *"pulled every scrape"* (they're the default creator set for a manual run) and the Watch
+> List is *"not auto-scraped"* — both describe manual-run behaviour, not a schedule. The original
+> app's "scraped weekly" wording is intentionally dropped.
+
+## 11.6 Greenlit additions (build after the core UI restyle)
+
+Three capabilities the wireframes show, approved for v1 but sequenced after the visual restyle. Each
+is local-only (SQLite), no new external calls.
+
+- **Scrape history** — `listRecentJobs(limit = 20)` on `jobs.repo.ts` + `GET /api/scrape/history`
+  returning the last N `scrape_jobs` rows (they are already persisted; this is read-only). Renders the
+  history table on Screen B.
+- **Markets + saved keywords** — a `keywords` table (`id`, `market`, `term`, `created_at`; unique
+  `(market, term)`). `GET/POST/DELETE /api/keywords` grouped by market; markets are the distinct
+  `market` values. Feeds the Keywords editor and prefills the Manual-Scrape keyword set; adds an
+  optional `market` filter to `GET /api/posts` (posts already carry a `market` column).
+- **Saved searches** — a `saved_searches` table (`id`, `name`, `params` JSON, `created_at`).
+  `GET/POST/DELETE /api/saved-searches`; selecting one repopulates the filter row. Purely a filter
+  preset — **not** a stored result set (no "trends" artefact; N1/N3 still hold).
+
+## 11.7 Visual design system
+
+A clean, minimal SaaS look (matches the §11.5 wireframes): light page, white cards with a hairline
+border + soft shadow, one blue primary, pill-shaped badges. **One global stylesheet**
+`app/globals.css`, imported once by `app/layout.tsx` (Next App Router). No CSS framework, no
+CSS-in-JS; components emit **semantic classNames** (`post-card`, `filter-bar`, `badge badge--green`,
+`chip`, `creators__row`, …) and the stylesheet targets those — so markup stays test-friendly and
+styling never leaks into jsdom component tests (they don't import the CSS).
+
+**Design tokens** (CSS custom properties on `:root`):
+
+| Token | Value | Use |
+|---|---|---|
+| `--bg` | `#f6f7f9` | page background |
+| `--surface` | `#ffffff` | cards, inputs |
+| `--surface-2` | `#f9fafb` | inset panels (add/bulk rows) |
+| `--border` | `#e5e7eb` | hairline card borders |
+| `--border-strong` | `#d1d5db` | input/button borders |
+| `--text` / `--text-muted` | `#111827` / `#6b7280` | body / meta text |
+| `--primary` / `--primary-hover` | `#2563eb` / `#1d4ed8` | primary CTA, links, focus ring |
+| `--danger` | `#dc2626` | Remove, failed states |
+| `--radius` / `--radius-sm` / `--radius-pill` | `10px` / `6px` / `999px` | cards / controls / pills |
+| `--shadow` | `0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.1)` | card elevation |
+| `--font` | system stack (Inter/–apple-system) | all text |
+
+**x-factor badge tones** map to `badge--green` / `badge--gray` / `badge--red` (from `xFactorBadge`):
+green `#dcfce7/#166534`, gray `#f3f4f6/#374151`, red `#fee2e2/#991b1b`. **Chips**: keyword chips light
+blue (`#eff6ff/#1d4ed8`), tag chips green (`#dcfce7/#166534`). **Platform** badge indigo.
+
+**Component rules:** cards = `--surface` + `1px --border` + `--radius` + `--shadow`. Buttons are neutral
+by default; **primary CTAs** (Search, Save, Add, Import, Run scrape now) are blue — selected by
+container context (`.filter-bar__search`, `.manual-scrape > button`, `.creators__add > button`,
+`.creators__bulk > button`, `.settings__actions button:first-child`) so **no extra markup** is needed.
+Active toggles use `button[aria-pressed='true']` (blue). The post grid is
+`grid-template-columns: repeat(auto-fill, minmax(320px, 1fr))`; list view is a single column. Focus
+styles use a `--primary` ring for accessibility. Keep it token-driven — restyle via tokens, not
+scattered values.
 
 ---
 
@@ -887,29 +1077,48 @@ Order within the layer (each independent, can be parallelized):
     *Tests:* `412 { needs }` when Apify/Voyage keys missing (lists only the still-missing ones);
     running job created + `runScrape` handed the `jobId`; `[id]` returns the row and 404s on unknown.
 
-### Layer 5 — UI (component + light e2e)
+### Layer 5 — UI (component + light e2e). Match the §11.5 wireframes.
 26. **`SettingsPanel` + onboarding gate** — paste Apify token, Voyage key, optional Anthropic
     key; edit actor ids; "Test connection" per provider (green/red). On first run (no keys), the
     app opens here and gates Scrape until Apify+Voyage are set. *Tests:* save calls PUT; gate
     shows when `ready.apify`/`ready.voyage` false.
-27. **`PostCard`** — render author, content (truncate/expand), engagement, platform badge,
-    scrape-source badge, **x-factor badge** (≥2× green 🔥 / 0.5–2× gray / <0.5× red), image,
-    group-size indicator.
-28. **`DashboardFilterBar`** — keywords chips, creator dropdown (All/None + search + bulk paste),
-    minLikes/minShares, **timeframe select + custom range**, **x-factor min**, platform select,
-    Group-by-image toggle + threshold slider, Discover-trends toggle + threshold slider.
-29. **`CreatorManager`** — list creators with tier, add (single/bulk), promote, delete.
-30. **`DashboardClient`** — state, fetch `/api/posts`, render grid vs group/cluster views,
-    **Scrape button** → POST `/api/scrape` → poll status pill.
-31. **`page.tsx`** — compose; on mount check `/api/settings` readiness → onboarding or dashboard;
-    load creators + first page.
+27. **`PostCard`** — selection checkbox + ＋(add author), avatar + author + posted date, content
+    (truncate/…see more), engagement 👍/💬/🔁, platform badge, scrape-source badge, **x-factor badge**
+    (≥2× green 🔥 / 0.5–2× gray / <0.5× red / hidden when null), image, group-size indicator.
+28. **`DashboardFilterBar`** — single search row (Screen A): keywords chips, creator dropdown (count),
+    ♥ minLikes / ↗ minShares / ✕ minXFactor, sort, **timeframe select + custom range**, market select,
+    platform pill, **Search**. Group-by-image / Discover-trends live in the header (step 30).
+29. **`CreatorManager`** — Core / Watch lists with tier, add (single/**bulk import**), **Demote**
+    (core→watch, explicit), Remove.
+30. **`DashboardClient`** (Search screen) — header ("Search Posts", "Showing N of M", grid/list
+    toggle, Group-by-image / Discover-trends buttons); fetch `/api/posts`; render grid vs
+    group/cluster views. **`ManualScrape`** is a separate component (on Scrape Settings, step 31):
+    Source/Platform/Timeframe selects + **Run scrape now** → POST `/api/scrape` → poll status pill.
+31. **`page.tsx` + `ScrapeSettings`** — `page.tsx` checks `/api/settings` readiness on mount and
+    routes between **Search** (`DashboardClient`) and **Scrape Settings** (`ScrapeSettings`), with
+    Search disabled until Apify+Voyage are set. `ScrapeSettings` composes `SettingsPanel` +
+    `CreatorManager` + `ManualScrape` (+ Keywords & History once Layer 6 lands).
+
+### Layer 6 — Greenlit additions (§11.6), after the Layer 5 restyle
+32. **Scrape history** — `listRecentJobs(20)` + `GET /api/scrape/history` + the history table.
+33. **Markets + saved keywords** — `keywords` table, `GET/POST/DELETE /api/keywords`, the Keywords
+    editor, `market` filter on `/api/posts`, and Manual-Scrape prefill.
+34. **Saved searches** — `saved_searches` table, `GET/POST/DELETE /api/saved-searches`, the
+    "Saved searches" dropdown that repopulates the filter row.
 
 ---
 
 ## 13. Testing strategy
 
-- **Vitest**, `environment: 'node'` for logic/db; component tests can use jsdom.
-- Coverage thresholds: **lines/functions/branches ≥ 80** globally; **100%** on
+- **Vitest**, `environment: 'node'` by default (logic/db/routes). **Component tests run under
+  jsdom** via a per-file docblock `// @vitest-environment jsdom` (keeps node fast for everything
+  else). Deps: `@testing-library/react` + `user-event` + `@testing-library/dom`; matchers from
+  `@testing-library/jest-dom/vitest` are registered in `tests/setup.ts`. `vitest.config.ts` sets
+  `esbuild: { jsx: 'automatic' }` so component tests need no `React` import. Component tests live in
+  `tests/unit/ui/*.test.tsx` and drive `/api/*` through msw (relative fetches match `*/api/...`).
+- Coverage `include` is **`lib/**`, `jobs/**`, `app/api/**`** — the `app/*.tsx` UI components are
+  intentionally **outside** coverage (behaviour is asserted by component tests, not line counts).
+  Thresholds: **lines/functions/branches ≥ 80** globally; **100%** on
   `lib/pure/x-factor.ts`, `lib/pure/dedup.ts`, `lib/pure/mappers.ts`,
   `lib/pure/similarity.ts`, `lib/pure/image-groups.ts`, `lib/pure/content-clusters.ts`,
   `lib/pure/vector-blob.ts`.
@@ -953,20 +1162,27 @@ secret keys start empty and are filled in by the user during onboarding.
 
 1. `npm run test` green; coverage thresholds met (incl. 100% on the listed pure modules).
 2. From a clean machine: `npm i && npm run dev`, open localhost, DB auto-migrates on first run.
-3. **First-run onboarding**: with no keys, the app opens Settings and Scrape is disabled. After
-   pasting a user's own Apify + Voyage keys (and optionally Anthropic) and passing the per-
-   provider connection tests, the dashboard unlocks. **No key was bundled or shipped.**
-4. Add a LinkedIn creator and a Twitter creator via the UI; both persist.
-5. Click **Scrape** → progress pill → new posts appear; second identical scrape inserts **0**
-   new posts (dedup proven).
-6. Posts show correct platform + scrape-source badges; x-factor badges appear for authors with
+3. **First-run onboarding**: with no keys, the app opens the **Scrape Settings** screen and the
+   **Search** tab is disabled. After pasting a user's own Apify + Voyage keys (and optionally
+   Anthropic) and passing the per-provider connection tests, Search unlocks. **No key was bundled.**
+4. Two screens reachable from the top nav — **Search** (`DashboardClient`) and **Scrape Settings**
+   (`ScrapeSettings`: keys + Core/Watch creators + Manual Scrape); the §11.7 design system is applied
+   (global `app/globals.css`).
+5. Add a LinkedIn creator and a Twitter creator via the UI; both persist. Demote a core creator.
+6. On **Scrape Settings**, **Run scrape now** → progress pill → new posts appear on **Search**; a
+   second identical scrape inserts **0** new posts (dedup proven).
+7. Posts show correct platform + scrape-source badges; x-factor badges appear for authors with
    ≥3 prior posts in window.
-7. Filters work and compose: platform, keywords, creators, min likes/shares, **min x-factor**,
+8. Filters work and compose: platform, keywords, creators, min likes/shares, **min x-factor**,
    and **time horizon** (incl. custom range).
-8. **Group by image** clusters visually-identical infographics; **Discover trends** clusters
+9. **Group by image** clusters visually-identical infographics; **Discover trends** clusters
    topically-similar posts. Both respect their threshold sliders.
-9. No network calls to Vercel or Supabase anywhere. Only Apify + Voyage (+ optional Anthropic),
-   each using the **user's own** keys.
+10. No network calls to Vercel or Supabase anywhere. Only Apify + Voyage (+ optional Anthropic),
+    each using the **user's own** keys.
+
+> **Layer 6 (§11.6) has its own acceptance**, not required for the v1 "done" above: scrape-history
+> table populates from `scrape_jobs`; per-market keyword sets persist and prefill Manual Scrape;
+> saved searches persist and repopulate the filter row.
 
 ---
 
@@ -978,7 +1194,13 @@ secret keys start empty and are filled in by the user during onboarding.
   search & profile modes). Seeded as editable defaults in `settings` (§6.4); the API token is BYO.
 - Q2 — Image descriptions (Claude vision): ship OFF in v1.0, ON in v1.1? (Recommendation: image
   *embeddings* ON, *descriptions* OFF for v1.)
-- Q3 — Local scheduler (e.g. a "scrape weekly" toggle backed by `node-cron`): deferred (N4).
+- Q3 — Local scheduler (e.g. a "scrape weekly" toggle backed by `node-cron`): **deferred, stays out
+  (N4).** All scraping is manual (§11.5 Manual Scrape); "Core" creators are the default set for a
+  manual run, not an auto-schedule.
+- **Scope note (2026-07):** **markets + saved keywords, saved searches, and scrape history are now
+  IN scope** (Layer 6, §11.6/§12) — approved after review of the reference UI. They are local-only
+  (SQLite), add no external calls, and are **not** the stripped "stored trends" artefact (N1/N3 still
+  hold). A future session should treat them as planned work, not scope creep.
 - Q4 — `sqlite-vec` extension: only if in-JS cosine on 400 candidates ever becomes a bottleneck
   (it won't at this scale).
 ```
