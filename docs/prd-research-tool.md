@@ -283,7 +283,7 @@ CREATE TABLE IF NOT EXISTS creators (
   author_id     TEXT,                          -- clean slug/handle for x-factor matching
   display_name  TEXT,
   avatar_url    TEXT,
-  tier          TEXT NOT NULL DEFAULT 'watch', -- 'core' | 'watch' (controls who the creator-scraper pulls)
+  tier          TEXT NOT NULL DEFAULT 'core',  -- every creator is 'core' (the scrape set); retained for that filter
   tags          TEXT NOT NULL DEFAULT '[]',    -- JSON array of strings
   market        TEXT NOT NULL DEFAULT 'ai',
   notes         TEXT,
@@ -294,10 +294,11 @@ CREATE TABLE IF NOT EXISTS creators (
 CREATE INDEX IF NOT EXISTS creators_tier_idx ON creators(tier);
 ```
 
-> **Tier semantics (simplified from original):** `tier` only controls **who the creator
-> scraper pulls** (it pulls `tier = 'core'`). It does **not** gate x-factor. X-factor is
-> computed for **any** post whose author has ≥3 prior posts in the DB within the window
-> (§8.3) — this removes the original's core-tier coupling and is simpler/correct.
+> **One creator list (no watch/core split in v1):** every creator is part of the scrape set —
+> `tier` defaults to `'core'` and the UI never sets anything else, so the creator list *is* the set
+> a creator/both scrape pulls. The column is retained only so the scraper can filter the set; it does
+> **not** gate x-factor. X-factor is computed for **any** post whose author has ≥3 prior posts in the
+> DB within the window (§8.3).
 
 ### 6.3 `scrape_jobs`
 
@@ -666,7 +667,7 @@ async function runScrape(opts: {
   platforms: ('linkedin'|'twitter')[],
   mode: 'keyword'|'creator'|'both',
   keywords?: string[],
-  creatorIds?: string[],         // which creators to pull; defaults to every tier-'core' creator
+  creatorIds?: string[],         // which creators to pull; defaults to every creator (all are 'core')
   timeframe: Timeframe,
   market: string,
   jobId?: string,                // pre-created job row (§10.6); runScrape creates one when absent
@@ -756,14 +757,15 @@ Timeframe → `posted_at >= now - N`: `24h`=1d, `3d`=3d, `week`=7d, `month`=30d,
 ### 11.2 `GET/POST/DELETE /api/creators`
 Platform detection / url normalization / `author_id` derivation happen **at the route layer** via
 `lib/pure/url.ts`; the repo is storage-only.
-- `GET` (optional `?tier=&tag=&platform=`) → `{ creators, tags }` (distinct tags across all creators).
-- `POST` body `{ input?: string, inputs?: string[], tier?, tags?, market?, notes? }` → add one or
-  many. Each entry may itself be newline/comma-separated. For each: detect platform (a `linkedin.com`
+- `GET` (optional `?tag=&platform=`) → `{ creators, tags }` (distinct tags across all creators).
+- `POST` body `{ input?: string, inputs?: string[], tags?, market?, notes? }` → add one or many.
+  Each entry may itself be newline/comma-separated. For each: detect platform (a `linkedin.com`
   url → LinkedIn; a Twitter/X url or bare `@handle` → Twitter), normalize the url, and derive
   `author_id` (`extractLinkedInSlug` for `/in/`|`/company/`, `extractTwitterHandle` for Twitter).
   Auto-fill `display_name` from any existing post by that author. Entries that resolve to no valid
   url/handle are skipped; a body with **zero** valid entries → `400`. Re-adding an existing creator
-  promotes `watch`→`core` (never downgrades). Returns the refreshed `{ creators, tags }`.
+  is **idempotent** — it updates the display fields and never creates a duplicate. Returns the
+  refreshed `{ creators, tags }`.
 - `DELETE /api/creators?id=` → remove a creator (`{ ok:true }`); missing `id` → `400`.
 
 ### 11.3 `POST /api/scrape` / `GET /api/scrape/[id]`
@@ -1009,12 +1011,12 @@ Order within the layer (each independent, can be parallelized):
     *Tests:* against `:memory:` db with seeded rows — filters, pagination/`hasMore`, ordering,
     x-factor update, dedup queries, clustering-candidate decode + image-required filter,
     `reEmbed`/`countUnembedded`, available-authors distinctness + avatar join.
-14. **`db/creators.repo.ts`** — surface is `upsertCreator(new)` (insert, or promote watch→core and
-    fill newly-provided display fields when the `profile_url` already exists — never downgrades
-    core), `listCreators(filter?)` → `{ creators, tags }` (distinct tags across ALL creators),
+14. **`db/creators.repo.ts`** — surface is `upsertCreator(new)` (insert, or idempotently update the
+    display fields when the `profile_url` already exists — no duplicate row; every creator is `core`),
+    `listCreators(filter?)` → `{ creators, tags }` (distinct tags across ALL creators),
     `deleteCreator(id)`. Storage only — platform detection / url normalization / author_id
     derivation happen at the route layer (§11.2) via `lib/pure/url.ts`. *Tests:* insert, unique url,
-    promote watch→core, no-downgrade, tag filter/extraction, delete.
+    idempotent re-add, tag filter/extraction, delete.
 15. **`db/jobs.repo.ts`** — `createJob({mode, platforms, market, params})` (status `running`,
     serializes `platforms`/`params` to JSON), `finishJob(id, {status:'succeeded', stats} | {status:'failed', error})`,
     `getJob(id)` → row | null.
@@ -1065,8 +1067,8 @@ Order within the layer (each independent, can be parallelized):
     serialized); partial PUT writes only given keys + trims/clears; `ready` flips per key; test route
     reports per-provider ok/error and skips a keyless provider.
 23. **`/api/creators`** — GET/POST/DELETE. *Tests:* add by LinkedIn url (normalized, slug derived) and
-    by `@handle`; auto-fill `display_name` from posts; add-many + promote watch→core; `400` on no
-    valid input; list + tier/tag/platform filter; delete (and `400` without id).
+    by `@handle`; auto-fill `display_name` from posts; add-many + idempotent re-add; `400` on no
+    valid input; list + tag/platform filter; delete (and `400` without id).
 24. **`/api/posts`** — paginated + grouping modes. *Tests:* each filter; sort modes; `hasMore`
     exactness; BLOBs/`raw_data` stripped; `availableAuthors` always present; `groupByImage` returns
     `imageGroups` + `imageGroupSize` annotation; `discoverTrends` returns `contentClusters`;
@@ -1154,6 +1156,15 @@ secret keys start empty and are filled in by the user during onboarding.
 
 `config.ts` holds no secrets and never throws on missing keys; the adapters and routes do the
 "key missing → Settings prompt" handling instead.
+
+**Persistence & no static caching:** the BYO keys (and all data) live in the SQLite file at
+`DB_PATH` (default `./research.db`, resolved from the project root — where `next dev`/`next start`
+run). `better-sqlite3` writes are synchronous, so a saved key is durable immediately and **persists
+across restarts** — the user enters keys once. Because App-Router route handlers are statically
+prerendered by default, **every route that reads the DB must export `dynamic = 'force-dynamic'`**
+(all `/api/*` do). Without it, `GET /api/settings` gets frozen at build time and the app keeps
+showing onboarding even though keys are saved — a real bug this rule prevents. (Deleting
+`research.db`, or launching from a different working directory, is the only way to "lose" keys.)
 
 ---
 
