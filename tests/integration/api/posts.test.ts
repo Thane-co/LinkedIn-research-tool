@@ -26,6 +26,15 @@ describe('GET /api/posts — paginated mode', () => {
     expect(body.posts[0].raw_data).toBeUndefined()
   })
 
+  it('filters by market bucket', async () => {
+    seed([
+      { id: 'a', market: 'ai' },
+      { id: 'b', market: 'linkedin' },
+    ])
+    const body = await (await get('?market=ai')).json()
+    expect(body.posts.map((p: { id: string }) => p.id)).toEqual(['a'])
+  })
+
   it('sorts, paginates, and computes hasMore exactly + returns availableAuthors', async () => {
     seed([
       { id: 'a', author_id: 'jane', author_name: 'Jane', likes: 5 },

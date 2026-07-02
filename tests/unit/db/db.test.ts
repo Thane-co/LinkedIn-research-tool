@@ -16,10 +16,10 @@ const indexNames = (db: Database.Database): string[] =>
   }[]).map((r) => r.name)
 
 describe('migrate', () => {
-  it('creates all four tables', () => {
+  it('creates all six tables', () => {
     const db = new Database(':memory:')
     migrate(db)
-    expect(tableNames(db)).toEqual(['creators', 'posts', 'scrape_jobs', 'settings'])
+    expect(tableNames(db)).toEqual(['creators', 'keywords', 'posts', 'saved_searches', 'scrape_jobs', 'settings'])
   })
 
   it('creates the load-bearing indexes (including the unique url index)', () => {
@@ -45,7 +45,7 @@ describe('migrate', () => {
     const db = new Database(':memory:')
     migrate(db)
     expect(() => migrate(db)).not.toThrow()
-    expect(tableNames(db)).toEqual(['creators', 'posts', 'scrape_jobs', 'settings'])
+    expect(tableNames(db)).toEqual(['creators', 'keywords', 'posts', 'saved_searches', 'scrape_jobs', 'settings'])
   })
 
   it('seeds the non-secret settings defaults', () => {

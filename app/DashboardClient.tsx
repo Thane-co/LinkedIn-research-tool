@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { DashboardFilterBar, type AuthorOption, type Filters } from '@/app/DashboardFilterBar'
 import { PostCard, type PostCardPost } from '@/app/PostCard'
+import { SavedSearches } from '@/app/SavedSearches'
 
 interface ImageGroup {
   postIds: string[]
@@ -133,6 +134,7 @@ export function DashboardClient() {
       </header>
 
       <DashboardFilterBar filters={filters} availableAuthors={data.availableAuthors} onChange={setFilters} onSearch={load} />
+      <SavedSearches current={filters} onApply={(p) => setFilters((f) => ({ ...f, ...p }))} />
 
       {data.imageGroups ? (
         <ul className="dashboard__groups">

@@ -12,7 +12,6 @@ const creator = (over: Record<string, unknown> = {}) => ({
   profile_url: 'https://www.linkedin.com/in/jane',
   author_id: 'jane',
   display_name: 'Jane Doe',
-  tier: 'core',
   tags: '[]',
   ...over,
 })
@@ -20,39 +19,25 @@ const creator = (over: Record<string, unknown> = {}) => ({
 afterEach(() => server.resetHandlers())
 
 describe('CreatorManager', () => {
-  it('loads and renders the core creator list on mount', async () => {
+  it('loads and renders the creator list on mount', async () => {
     server.use(http.get('*/api/creators', () => HttpResponse.json({ creators: [creator()], tags: [] })))
     render(<CreatorManager />)
     expect(await screen.findByText('Jane Doe')).toBeInTheDocument()
   })
 
-  it('adds a creator via POST with the profile input + selected tier', async () => {
-    const cap: { body: { inputs?: string[]; tier?: string } | null } = { body: null }
+  it('adds a creator via POST with the profile input', async () => {
+    const cap: { body: { inputs?: string[] } | null } = { body: null }
     server.use(
       http.get('*/api/creators', () => HttpResponse.json({ creators: [], tags: [] })),
       http.post('*/api/creators', async ({ request }) => {
-        cap.body = (await request.json()) as { inputs?: string[]; tier?: string }
+        cap.body = (await request.json()) as { inputs?: string[] }
         return HttpResponse.json({ creators: [], tags: [] })
       }),
     )
     render(<CreatorManager />)
     await userEvent.type(screen.getByLabelText(/profile url/i), '@janedev')
     await userEvent.click(screen.getByRole('button', { name: /^add$/i }))
-    expect(cap.body).toMatchObject({ inputs: ['@janedev'], tier: 'core' })
-  })
-
-  it('demotes a core creator via PATCH', async () => {
-    const cap: { body: { id?: string; tier?: string } | null } = { body: null }
-    server.use(
-      http.get('*/api/creators', () => HttpResponse.json({ creators: [creator()], tags: [] })),
-      http.patch('*/api/creators', async ({ request }) => {
-        cap.body = (await request.json()) as { id?: string; tier?: string }
-        return HttpResponse.json({ creators: [], tags: [] })
-      }),
-    )
-    render(<CreatorManager />)
-    await userEvent.click(await screen.findByRole('button', { name: /^demote$/i }))
-    expect(cap.body).toEqual({ id: 'c1', tier: 'watch' })
+    expect(cap.body).toMatchObject({ inputs: ['@janedev'] })
   })
 
   it('deletes a creator via DELETE with its id', async () => {

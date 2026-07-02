@@ -90,6 +90,14 @@ describe('searchPosts — filters', () => {
     expect(searchPosts({ authors: ['jane'] }).posts.map((p) => p.id)).toEqual(['a'])
   })
 
+  it('filters by market bucket', () => {
+    seed([
+      { id: 'a', market: 'ai' },
+      { id: 'b', market: 'linkedin' },
+    ])
+    expect(searchPosts({ market: 'ai' }).posts.map((p) => p.id)).toEqual(['a'])
+  })
+
   it('applies engagement floors (minLikes / minShares)', () => {
     seed([
       { id: 'a', likes: 100, shares: 10 },

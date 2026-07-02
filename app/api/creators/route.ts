@@ -3,10 +3,13 @@
 // lib/pure/url.ts; storage + promote-on-re-add live in the creators repo.
 
 import { NextResponse } from 'next/server'
-import { deleteCreator, listCreators, setCreatorTier, upsertCreator } from '@/lib/db/creators.repo'
+import { deleteCreator, listCreators, upsertCreator } from '@/lib/db/creators.repo'
 import { getAuthorHistory } from '@/lib/db/posts.repo'
 import { extractLinkedInSlug, extractTwitterHandle, normalizeProfileUrl } from '@/lib/pure/url'
 import type { CreatorTier, Platform } from '@/lib/types'
+
+// Reads/writes the live DB — never statically prerender/cache.
+export const dynamic = 'force-dynamic'
 
 interface ParsedCreator {
   platform: Platform
@@ -75,15 +78,6 @@ export async function POST(req: Request): Promise<NextResponse> {
     })
   }
 
-  return NextResponse.json(listCreators())
-}
-
-export async function PATCH(req: Request): Promise<NextResponse> {
-  const body = (await req.json()) as { id?: string; tier?: CreatorTier }
-  if (!body.id || (body.tier !== 'core' && body.tier !== 'watch')) {
-    return NextResponse.json({ error: 'id and tier ("core"|"watch") required' }, { status: 400 })
-  }
-  setCreatorTier(body.id, body.tier) // explicit promote/demote (never silent)
   return NextResponse.json(listCreators())
 }
 

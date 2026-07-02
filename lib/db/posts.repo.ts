@@ -15,6 +15,7 @@ export interface PostFilters {
   timeframe?: Timeframe
   dateFrom?: string
   dateTo?: string
+  market?: string
   sort?: SortMode
   page?: number
   pageSize?: number
@@ -97,6 +98,10 @@ function buildWhere(filters: PostFilters): { clause: string; params: unknown[] }
   if (filters.minXFactor !== undefined) {
     conditions.push('x_factor >= ?') // NULL x_factor is excluded by the comparison
     params.push(filters.minXFactor)
+  }
+  if (filters.market) {
+    conditions.push('market = ?')
+    params.push(filters.market)
   }
   if (filters.timeframe === 'custom') {
     if (filters.dateFrom) {

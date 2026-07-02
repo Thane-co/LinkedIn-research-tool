@@ -67,3 +67,10 @@ export function getJob(id: string): ScrapeJobRow | null {
       | undefined) ?? null
   )
 }
+
+/** Most-recent scrape runs, newest-first (Layer 6 — scrape history, §11.6). */
+export function listRecentJobs(limit = 20): ScrapeJobRow[] {
+  return getDb()
+    .prepare(`SELECT ${COLUMNS} FROM scrape_jobs ORDER BY started_at DESC LIMIT ?`)
+    .all(limit) as ScrapeJobRow[]
+}

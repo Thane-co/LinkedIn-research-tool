@@ -2,7 +2,7 @@
 import { http, HttpResponse } from 'msw'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DashboardClient } from '@/app/DashboardClient'
 import { server } from '@/tests/msw/server'
 
@@ -32,6 +32,10 @@ const postsResponse = (posts: unknown[], total = posts.length) => ({
   availableAuthors: [],
 })
 
+beforeEach(() => {
+  // DashboardClient embeds SavedSearches, which loads presets on mount.
+  server.use(http.get('*/api/saved-searches', () => HttpResponse.json({ searches: [] })))
+})
 afterEach(() => server.resetHandlers())
 
 describe('DashboardClient', () => {

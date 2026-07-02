@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { getDb, resetDb } from '@/lib/db/db'
-import { createJob, finishJob, getJob } from '@/lib/db/jobs.repo'
+import { createJob, finishJob, getJob, listRecentJobs } from '@/lib/db/jobs.repo'
 import type { ScrapeStats } from '@/lib/types'
 
 beforeEach(() => getDb(':memory:'))
@@ -56,5 +56,16 @@ describe('jobs.repo', () => {
     expect(done.status).toBe('failed')
     expect(done.error).toBe('apify exploded')
     expect(done.finished_at).toBeTruthy()
+  })
+
+  it('listRecentJobs returns newest-first, capped at the limit', () => {
+    for (let i = 0; i < 5; i++) {
+      createJob({ mode: 'keyword', platforms: ['linkedin'], market: 'ai', params: null })
+    }
+    const recent = listRecentJobs(3)
+    expect(recent).toHaveLength(3)
+    // started_at is descending (newest first)
+    const times = recent.map((j) => j.started_at)
+    expect([...times].sort((a, b) => (a < b ? 1 : -1))).toEqual(times)
   })
 })

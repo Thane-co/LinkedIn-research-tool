@@ -13,6 +13,9 @@ import { findContentClusters } from '@/lib/pure/content-clusters'
 import { findSimilarImageGroups } from '@/lib/pure/image-groups'
 import type { PostRow, PostWithMedia, SortMode, Timeframe } from '@/lib/types'
 
+// Reads the live DB — never statically prerender/cache.
+export const dynamic = 'force-dynamic'
+
 /** Parse the shared filter set from the query string (PRD §11.1). */
 function parseFilters(sp: URLSearchParams): PostFilters {
   const num = (key: string): number | undefined => {
@@ -33,6 +36,7 @@ function parseFilters(sp: URLSearchParams): PostFilters {
     timeframe: (sp.get('timeframe') as Timeframe | null) ?? undefined,
     dateFrom: sp.get('dateFrom') ?? undefined,
     dateTo: sp.get('dateTo') ?? undefined,
+    market: sp.get('market') || undefined,
     sort: (sp.get('sort') as SortMode | null) ?? undefined,
     page: num('page'),
     pageSize: num('pageSize'),

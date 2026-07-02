@@ -19,6 +19,8 @@ describe('Page (readiness gate)', () => {
     server.use(
       http.get('*/api/settings', () => HttpResponse.json(settings({ apify: false, voyage: false }))),
       http.get('*/api/creators', () => HttpResponse.json({ creators: [], tags: [] })),
+      http.get('*/api/keywords', () => HttpResponse.json({ groups: [] })),
+      http.get('*/api/scrape/history', () => HttpResponse.json({ jobs: [] })),
     )
     render(<Page />)
     expect(await screen.findByTestId('settings-gate')).toBeInTheDocument()
@@ -30,6 +32,7 @@ describe('Page (readiness gate)', () => {
     server.use(
       http.get('*/api/settings', () => HttpResponse.json(settings({ apify: true, voyage: true }))),
       http.get('*/api/posts', () => HttpResponse.json(emptyPosts)),
+      http.get('*/api/saved-searches', () => HttpResponse.json({ searches: [] })),
     )
     render(<Page />)
     expect(await screen.findByRole('heading', { name: /search posts/i })).toBeInTheDocument()

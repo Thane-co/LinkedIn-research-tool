@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { getDb, resetDb } from '@/lib/db/db'
-import { deleteCreator, listCreators, setCreatorTier, upsertCreator } from '@/lib/db/creators.repo'
+import { deleteCreator, listCreators, upsertCreator } from '@/lib/db/creators.repo'
 import type { NewCreator } from '@/lib/db/creators.repo'
 
 beforeEach(() => getDb(':memory:'))
@@ -52,15 +52,6 @@ describe('upsertCreator', () => {
   })
 })
 
-describe('setCreatorTier', () => {
-  it('explicitly demotes core → watch (and promotes back)', () => {
-    const row = upsertCreator(jane({ tier: 'core' }))
-    setCreatorTier(row.id, 'watch')
-    expect(listCreators({ tier: 'watch' }).creators.map((c) => c.id)).toEqual([row.id])
-    setCreatorTier(row.id, 'core')
-    expect(listCreators({ tier: 'core' }).creators.map((c) => c.id)).toEqual([row.id])
-  })
-})
 
 describe('listCreators', () => {
   beforeEach(() => {

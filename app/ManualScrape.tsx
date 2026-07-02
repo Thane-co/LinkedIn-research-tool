@@ -1,9 +1,9 @@
 'use client'
-// Layer 5 — ManualScrape (PRD §11.5 Screen B, §11.3): the manual "Run scrape now" control. There is
-// NO scheduler (local, no-cron); this is the only way a scrape starts. POST /api/scrape -> poll
-// /api/scrape/[id] -> status pill. Keywords come from the Layer 6 keywords store (passed in for now).
+// Layer 5/6 — ManualScrape (PRD §11.5 Screen B, §11.3/§11.6): the manual "Run scrape now" control.
+// There is NO scheduler (local, no-cron); this is the only way a scrape starts. Self-contained: pulls
+// the core-creator count and the per-market keyword sets, POSTs /api/scrape → polls the status pill.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ScrapeMode, Timeframe } from '@/lib/types'
 
 type Source = 'both' | 'creator' | 'keyword'
@@ -14,21 +14,34 @@ type Pill =
   | { status: 'failed'; error?: string }
   | { status: 'blocked'; needs: string[] }
 
+interface KeywordGroup {
+  market: string
+  terms: { term: string }[]
+}
+
 const TIMEFRAMES: Timeframe[] = ['24h', '3d', 'week', 'month', '3months']
 
-export function ManualScrape({
-  coreCount = 0,
-  keywords = [],
-  pollIntervalMs = 1500,
-}: {
-  coreCount?: number
-  keywords?: string[]
-  pollIntervalMs?: number
-}) {
+export function ManualScrape({ pollIntervalMs = 1500 }: { pollIntervalMs?: number }) {
+  const [coreCount, setCoreCount] = useState(0)
+  const [groups, setGroups] = useState<KeywordGroup[]>([])
   const [source, setSource] = useState<Source>('both')
   const [platform, setPlatform] = useState<'all' | 'linkedin' | 'twitter'>('all')
   const [timeframe, setTimeframe] = useState<Timeframe>('week')
+  const [market, setMarket] = useState('') // '' = all markets
   const [pill, setPill] = useState<Pill>({ status: 'idle' })
+
+  useEffect(() => {
+    void fetch('/api/creators')
+      .then((r) => r.json())
+      .then((b: { creators: unknown[] }) => setCoreCount(b.creators.length))
+    void fetch('/api/keywords')
+      .then((r) => r.json())
+      .then((b: { groups: KeywordGroup[] }) => setGroups(b.groups))
+  }, [])
+
+  const keywords = (market ? groups.filter((g) => g.market === market) : groups).flatMap((g) =>
+    g.terms.map((t) => t.term),
+  )
 
   async function poll(jobId: string): Promise<void> {
     const res = await fetch(`/api/scrape/${jobId}`)
@@ -49,7 +62,7 @@ export function ManualScrape({
     const res = await fetch('/api/scrape', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ mode: source as ScrapeMode, platforms, timeframe, keywords }),
+      body: JSON.stringify({ mode: source as ScrapeMode, platforms, timeframe, market: market || undefined, keywords }),
     })
     if (res.status === 412) {
       const { needs } = (await res.json()) as { needs: string[] }
@@ -90,13 +103,24 @@ export function ManualScrape({
             ))}
           </select>
         </label>
+        <label>
+          Market
+          <select value={market} onChange={(e) => setMarket(e.target.value)}>
+            <option value="">All markets</option>
+            {groups.map((g) => (
+              <option key={g.market} value={g.market}>
+                {g.market}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <button type="button" onClick={run} disabled={pill.status === 'running'}>
         Run scrape now
       </button>
       <span className="manual-scrape__summary">
-        {coreCount} core creators + {keywords.length} keywords · {timeframe}
+        {coreCount} creators + {keywords.length} keywords · {timeframe}
       </span>
 
       <span className="manual-scrape__pill" data-status={pill.status} role="status">

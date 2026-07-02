@@ -467,13 +467,43 @@ button[aria-pressed='true'] {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border-strong));
 }
-.creators__watch {
-  margin-top: 12px;
-}
-.creators__watch > button {
-  width: 100%;
-  text-align: left;
+
+/* ── Keywords editor ───────────────────────────────────────────────────── */
+.keywords__market {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  margin-bottom: 12px;
   background: var(--surface-2);
+}
+.keywords__market-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.keywords__market-head strong {
+  text-transform: capitalize;
+}
+.keywords__market-head button {
+  margin-left: auto;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border-strong));
+}
+.keywords__terms {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px;
+}
+.keywords__add {
+  margin-left: 4px;
+}
+.keywords__new {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 4px;
 }
 
 .manual-scrape__controls {

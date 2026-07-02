@@ -107,13 +107,6 @@ export function listCreators(filter?: {
   return { creators, tags: [...tagSet] }
 }
 
-/** Explicitly set a creator's tier (e.g. the Demote action, core→watch). Not silent — user-driven. */
-export function setCreatorTier(id: string, tier: CreatorTier): void {
-  getDb()
-    .prepare('UPDATE creators SET tier = ?, updated_at = ? WHERE id = ?')
-    .run(tier, new Date().toISOString(), id)
-}
-
 export function deleteCreator(id: string): void {
   getDb().prepare('DELETE FROM creators WHERE id = ?').run(id)
 }
