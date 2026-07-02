@@ -1,0 +1,69 @@
+PROPRIETARY SOFTWARE LICENSE
+
+Copyright (c) 2026 [YOUR NAME]. All rights reserved.
+
+This software and its source code (the "Software") are the exclusive property of
+[YOUR NAME] (the "Licensor"). The Software is licensed, not sold. It is made
+available privately to specific individuals chosen by the Licensor, and only to
+those individuals.
+
+1. GRANT OF LICENSE
+   Subject to your continued compliance with this License, the Licensor grants
+   you — and only you, the individual to whom the Licensor directly provided a
+   copy of the Software — a personal, non-exclusive, non-transferable,
+   non-sublicensable, revocable license to install and run the Software on
+   devices that you own or personally control, solely for your own personal,
+   non-commercial use.
+
+2. RESTRICTIONS
+   You may NOT, in whole or in part, directly or indirectly:
+   (a) copy the Software, except as strictly necessary to install and run it for
+       your own use as permitted above, or make a single backup copy;
+   (b) distribute, publish, post, share, transfer, lend, rent, lease, sell,
+       resell, sublicense, or otherwise make the Software available to any other
+       person or entity, by any means, whether or not for a fee;
+   (c) use the Software for any commercial purpose, or on behalf of any third
+       party;
+   (d) modify, adapt, translate, or create derivative works of the Software and
+       distribute or make them available to anyone else;
+   (e) remove, obscure, or alter any copyright, license, or proprietary notice.
+
+3. INVITATION ONLY
+   Rights under this License extend only to a person who received the Software
+   directly from the Licensor. Any person who obtains the Software by any other
+   means acquires no rights, is not licensed to use it, and must delete all
+   copies immediately.
+
+4. COMMERCIAL USE, SHARING, AND REDISTRIBUTION
+   Any commercial use of the Software, and any wish to share, redistribute, or
+   provide access to the Software to any other person or entity, requires a
+   separate, prior, written license from the Licensor. To request one, contact:
+
+       [YOUR NAME] — [your-contact-email@example.com]
+
+5. RESERVATION OF RIGHTS
+   All rights not expressly granted to you in this License are reserved by the
+   Licensor. No title to or ownership of the Software is transferred to you.
+
+6. TERMINATION
+   This License is effective until terminated. It terminates automatically,
+   without notice, if you breach any of its terms, and the Licensor may
+   otherwise revoke it at any time. Upon termination you must stop using the
+   Software and delete all copies in your possession or control.
+
+7. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+8. LIMITATION OF LIABILITY
+   IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+   OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+   The Software scrapes third-party platforms and calls third-party APIs
+   (Apify, Voyage, and optionally Anthropic) using API keys and accounts that
+   you supply. You are solely responsible for your use of those services,
+   including any fees they charge and compliance with their terms of service and
+   with all applicable laws.

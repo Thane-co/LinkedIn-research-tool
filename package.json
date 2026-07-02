@@ -2,7 +2,11 @@
   "name": "viral-post-research-tool",
   "version": "0.1.0",
   "private": true,
+  "license": "UNLICENSED",
   "description": "Single-user, fully-local research tool for finding viral social posts (LinkedIn + Twitter/X).",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "next dev -H 127.0.0.1",
     "build": "next build",
