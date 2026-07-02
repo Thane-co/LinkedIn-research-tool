@@ -865,8 +865,9 @@ Two screens: **Search** (the default dashboard) and **Scrape Settings** (creator
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Header controls (right): **grid/list** view toggle; **Group by image** and **Discover trends** are
-toggle buttons that switch `/api/posts` into grouping mode (§11.1) — active state is visually pressed.
+Header controls (right): **Group by image** and **Discover trends** are toggle buttons that switch
+`/api/posts` into grouping mode (§11.1) — active state is visually pressed. Results always render as
+the responsive post grid (no list-view toggle).
 When a grouping mode is active, a **similarity slider** appears next to it (0.3–0.95) bound to
 `imageThreshold` / `textThreshold`, so the user can loosen/tighten grouping live. Each group/cluster
 row shows **"N% similar"** (§9.3/§9.4); if nothing groups, an **empty-state** explains why (lower the
@@ -986,7 +987,7 @@ by default; **primary CTAs** (Search, Save, Add, Import, Run scrape now) are blu
 container context (`.filter-bar__search`, `.manual-scrape > button`, `.creators__add > button`,
 `.creators__bulk > button`, `.settings__actions button:first-child`) so **no extra markup** is needed.
 Active toggles use `button[aria-pressed='true']` (blue). The post grid is
-`grid-template-columns: repeat(auto-fill, minmax(320px, 1fr))`; list view is a single column. Focus
+`grid-template-columns: repeat(auto-fill, minmax(320px, 1fr))`. Focus
 styles use a `--primary` ring for accessibility. Keep it token-driven — tune via tokens, not
 scattered values.
 
@@ -1158,8 +1159,8 @@ Order within the layer (each independent, can be parallelized):
     **bulk import** (paste box) or **upload CSV** (client-side file read → same `inputs[]` POST, via
     pure `lib/pure/csv.ts`), Remove. Accepts full LinkedIn/X urls or a Twitter `@handle` (a bare
     non-@ word is treated as a Twitter handle; LinkedIn needs the url).
-30. **`DashboardClient`** (Search screen) — header ("Search Posts", "Showing N of M", grid/list
-    toggle, Group-by-image / Discover-trends buttons + a **similarity slider** per active grouping
+30. **`DashboardClient`** (Search screen) — header ("Search Posts", "Showing N of M",
+    Group-by-image / Discover-trends buttons + a **similarity slider** per active grouping
     mode); fetch `/api/posts`; render grid, or group/cluster panels showing **"N% similar"** that
     **expand (`<details>`) to reveal the member post cards** (looked up from `posts` by `postId`), with
     an **empty-state** when nothing groups. **`ManualScrape`** is a separate component (on Scrape Settings, step 31):

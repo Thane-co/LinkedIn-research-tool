@@ -1,7 +1,7 @@
 'use client'
 // Layer 5 — DashboardClient (PRD §12 step 30, wireframe §11.5 Screen A): header (title, result
-// count, grid/list toggle, Group-by-image / Discover-trends buttons), the search filter row, and the
-// results (post grid vs image-group / content-cluster views). Scraping lives on Scrape Settings.
+// count, Group-by-image / Discover-trends buttons), the search filter row, and the results (post
+// grid vs image-group / content-cluster views). Scraping lives on Scrape Settings.
 
 import { useCallback, useEffect, useState } from 'react'
 import { DashboardFilterBar, type AuthorOption, type Filters } from '@/app/DashboardFilterBar'
@@ -104,7 +104,6 @@ function GroupPanel({
 
 export function DashboardClient() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
-  const [view, setView] = useState<'grid' | 'list'>('grid')
   const [data, setData] = useState<PostsResponse>({ posts: [], total: 0, availableAuthors: [], hasMore: false })
 
   const load = useCallback(async (): Promise<void> => {
@@ -117,7 +116,6 @@ export function DashboardClient() {
   }, [load])
 
   const total = data.total ?? data.posts.length
-  const grouping = Boolean(data.imageGroups || data.contentClusters)
   const postById = new Map(data.posts.map((p) => [p.id, p]))
 
   return (
@@ -130,14 +128,6 @@ export function DashboardClient() {
           </p>
         </div>
         <div className="dashboard__header-actions">
-          <div className="dashboard__view" role="group" aria-label="view">
-            <button type="button" aria-label="grid view" aria-pressed={view === 'grid'} onClick={() => setView('grid')}>
-              ▦
-            </button>
-            <button type="button" aria-label="list view" aria-pressed={view === 'list'} onClick={() => setView('list')}>
-              ≣
-            </button>
-          </div>
           <button
             type="button"
             aria-pressed={filters.groupByImage}
@@ -223,7 +213,7 @@ export function DashboardClient() {
           </div>
         )
       ) : (
-        <div className={`dashboard__results dashboard__results--${grouping ? 'grid' : view}`}>
+        <div className="dashboard__results dashboard__results--grid">
           {data.posts.map((p) => (
             <PostCard key={p.id} post={p} />
           ))}
