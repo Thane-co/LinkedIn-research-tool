@@ -90,10 +90,10 @@ project folder (git-ignored; it holds your keys + scraped data — don't share i
 
 ## Licensing
 
-© 2026 [YOUR NAME]. All rights reserved. This software is **proprietary and invitation-only** — see
+© 2026 Basia Kubicka (Thane & CO, LLC). All rights reserved. This software is **proprietary and invitation-only** — see
 the [LICENSE](LICENSE) file for the full terms. In short:
 
 - You may **install and use it personally**, on your own devices, for non-commercial purposes.
 - You may **not** share, redistribute, resell, publish, or give it to anyone else.
 - **Commercial use or sharing with others requires a separate paid license** — contact
-  **[YOUR NAME] · [your-contact-email@example.com]** to arrange one.
+  **Basia Kubicka (Thane & CO, LLC) · basia@before9.am** to arrange one.
