@@ -9,9 +9,9 @@
 
 ## 0. How to read this document
 
-This PRD is written so that a fresh Claude Code session can build the entire product. Every number, formula, model name,
-threshold, column, and index is specified explicitly. Where the original app made a
-decision, the decision and its rationale are recorded so they are not silently re-derived.
+This PRD is written so that a fresh Claude Code session can build the entire product in one pass. Every number, formula,
+model name, threshold, column, and index is specified explicitly, together with the rationale for each load-bearing
+decision so it is not silently re-derived.
 
 The build is broken into **dependency layers** (Section 12). Build strictly bottom-up:
 Layer 0 has zero I/O dependencies and is pure-function + fully unit-tested; each
@@ -77,16 +77,16 @@ creator add/remove UI · manual scrape button with progress.
 
 | Concern | Choice | Rationale |
 |---|---|---|
-| Runtime / UI | **Next.js 14 (App Router), run locally** (`next dev` / `next start`) | The original is already Next.js 14; routes & React components port ~1:1. Easiest + cheapest path. |
-| Language | **TypeScript, strict mode, no `any`** | Matches original standards. |
+| Runtime / UI | **Next.js 14 (App Router), run locally** (`next dev` / `next start`) | One toolchain for routes + React UI; runs entirely on the user's machine. |
+| Language | **TypeScript, strict mode, no `any`** | Types are load-bearing (schema shapes, vector dims); strict catches drift at compile time. |
 | Database | **SQLite** via **`better-sqlite3`** | Embedded, synchronous, zero-config, single file. Fast for local single-user. |
 | Vector storage | Embeddings stored as **BLOB (Float32, 1024 dims)** in SQLite | No pgvector / no native vector extension. |
-| Vector search | **In-JS cosine similarity** over a capped candidate set (≤400) | Mirrors original legacy JS clustering path; O(n²) on ≤400 is trivial. `sqlite-vec` is an optional future optimization, **not** required for v1. |
+| Vector search | **In-JS cosine similarity** over a capped candidate set (≤400) | O(n²) on ≤400 is trivial; keeps everything in one process. `sqlite-vec` is an optional future optimization, **not** required for v1. |
 | Scraping | **Apify** (`apify-client`) | Accepted external dependency. |
-| Text embeddings | **Voyage `voyage-3`** (1024-dim) via `https://api.voyageai.com/v1/embeddings` | Accepted external dependency; same model as original. |
-| Image embeddings | **Voyage `voyage-multimodal-3`** (1024-dim) via `https://api.voyageai.com/v1/multimodalembeddings` | Same as original. |
+| Text embeddings | **Voyage `voyage-3`** (1024-dim) via `https://api.voyageai.com/v1/embeddings` | Strong general text embeddings; 1024-dim keeps BLOBs small. |
+| Image embeddings | **Voyage `voyage-multimodal-3`** (1024-dim) via `https://api.voyageai.com/v1/multimodalembeddings` | Same provider/dim as text; enables "same infographic" grouping. |
 | Image description (optional) | **Anthropic Claude vision** (`claude-sonnet-4-6`) | Optional enrichment; see §7.4. Can be deferred. |
-| Testing | **Vitest** + `@vitest/coverage-v8` | Matches original. |
+| Testing | **Vitest** + `@vitest/coverage-v8` | Fast, native ESM/TS; jsdom for component tests. |
 | HTTP mocking | **msw** (or `nock`) | Mock Apify / Voyage / Anthropic. |
 | **API keys** | **Bring-your-own (BYO).** Each user supplies their own Apify token, Voyage key, and (optional) Anthropic key via an in-app **Settings** screen; stored in the local SQLite DB. **No keys are bundled, hardcoded, or read from a shipped `.env`.** | This is a tool other people run on their own machines with their own accounts — the author never ships or pays for keys. See §6.4 + §13. |
 
@@ -355,8 +355,8 @@ Rules:
   test `:memory:` db and avoids a `db.ts` ↔ `settings.repo.ts` circular import. Secret keys are never
   seeded — they start absent.
 - **`getSettings()` also merges defaults at read time** (`{ ...SETTINGS_DEFAULTS, ...storedRows }`,
-  stored wins). So the non-secret defaults are always present even against an unseeded db — the
-  migrate-time seed and the read-time merge are belt-and-suspenders. `getKey(name)` returns
+  stored wins), so the non-secret defaults are always present even against an unseeded db (the
+  migrate-time seed and the read-time merge are independent safeguards). `getKey(name)` returns
   `undefined` for an unset **or** empty/cleared value.
 - All adapters (`apify.ts`, `voyage.ts`, `anthropic.ts`) read keys via `getSettings()`/`getKey()`,
   never from `process.env`.
@@ -480,7 +480,7 @@ weighted_score = likes * 1 + comments * 3 + shares * 5
 For a post `P` by author `A` posted at time `T`:
 1. Collect all **other** posts by `A` with `posted_at` in the **open** interval `(T - 30d, T)` —
    i.e. `T - 30d < posted_at < T`. **Both edges are exclusive:** a post dated exactly 30 days
-   before `T` is **excluded** (matches §12 step 2's boundary test; resolved 2026-07-01).
+   before `T` is **excluded** (the boundary is tested explicitly — see §12 Layer 0).
 2. If fewer than `MIN_SAMPLE_SIZE` (3) such posts exist → `creator_baseline = null`,
    `x_factor = null`.
 3. Else `creator_baseline = mean(weighted_score of those prior posts)`.
@@ -508,9 +508,9 @@ DB):
    scatter one author's history across several "authors" and corrupt every baseline.
 5. Non-fatal: log errors, never let recompute failure abort the scrape.
 
-> Optional optimization (original updated only the most-recent 30d of posts while using older
-> ones purely as baseline contributors). For a local single-user DB this is unnecessary;
-> updating all of an author's posts is fine and simpler. Keep it simple unless perf bites.
+> Optional optimization: you could update only the most-recent 30d of an author's posts while using
+> older ones purely as baseline contributors. For a local single-user DB this is unnecessary —
+> recomputing all of an author's posts is simpler. Keep it simple unless perf bites.
 
 ---
 
@@ -561,8 +561,8 @@ MIN_GROUP_SIZE = 2                   // both image groups and content clusters
   `label` = first sentence (≤100 chars) of the **highest-centrality** post.
 - Per cluster: `label`, `totalLikes`, `totalShares`, `postIds[]`; sort by total engagement DESC.
 
-> These mirror the original `lib/image-groups.ts` / `lib/content-clusters.ts` exactly.
-> No Claude, no pgvector — pure functions, fully unit-testable with small fixture vectors.
+> Both live in `lib/pure/image-groups.ts` / `lib/pure/content-clusters.ts`. No Claude, no pgvector —
+> pure functions, fully unit-testable with small fixture vectors.
 
 ---
 
@@ -570,9 +570,8 @@ MIN_GROUP_SIZE = 2                   // both image groups and content clusters
 
 ### 10.1 Apify actors
 
-**Three actors total** (confirmed from the original project's `.env.local`). Default ids are
-seeded in the `settings` table (§6.4) and are editable in the Settings UI; the **API token**
-is the user's own (BYO):
+**Three actors total.** Default ids are seeded in the `settings` table (§6.4) and are editable in the
+Settings UI; the **API token** is the user's own (BYO):
 
 | settings key | default actor | platform / mode |
 |---|---|---|
@@ -585,7 +584,7 @@ is the user's own (BYO):
 > Do not split this into two actor ids. If the Apify token or a needed actor id is empty, skip
 > that scraper gracefully and surface a Settings prompt.
 
-> **Actor-id path encoding (gotcha):** in Apify REST paths the `/` in an actor id becomes `~`
+> **Actor-id path encoding:** in Apify REST paths the `/` in an actor id becomes `~`
 > (e.g. `acts/harvestapi~linkedin-post-search/runs`). Encode it or every run 404s.
 
 ### 10.2 Actor input builders (pure-ish; in `lib/apify.ts`)
@@ -717,6 +716,11 @@ enrich run, and a transient scrape error is caught per-actor (`raw=0`); add back
 
 ## 11. API & data-layer surface
 
+All routes return `NextResponse.json()`. **Every route handler that reads or writes the DB exports
+`export const dynamic = 'force-dynamic'`** (§14) — App-Router handlers are statically prerendered by
+default, which would freeze DB reads (e.g. settings readiness) at build time. Routes stay thin: parse
+→ call a repo/job/pure function → return JSON.
+
 ### 11.1 `GET /api/posts` — the main read endpoint
 Query params:
 ```
@@ -727,7 +731,7 @@ minLikes=int  minShares=int              (engagement floors; default 0)
 minXFactor=float                          (x_factor >= value; null x_factor excluded)
 timeframe=24h|3d|week|month|3months|custom
 dateFrom=ISO  dateTo=ISO                  (when timeframe=custom)
-market=string                             (posts.market bucket; greenlit §11.6, §6.5)
+market=string                             (posts.market bucket; §11.6, §6.5)
 sort=recent|likes|xfactor                 (default recent)
 groupByImage=true|false                   (default false)
 discoverTrends=true|false                 (default false)
@@ -832,10 +836,10 @@ Filter row → `/api/posts` params (§11.1):
 | ✕ number | `minXFactor` |
 | Newest ▾ (Newest / Most liked / Highest x-factor) | `sort` |
 | Last week ▾ (24h/3d/week/month/3months/custom) | `timeframe` (+ `dateFrom`/`dateTo`) |
-| Framework ▾ (market) | `market` *(greenlit, §11.6)* |
+| Framework ▾ (market) | `market` *(§11.6)* |
 | LinkedIn ✕ (platform pill; ✕ clears to All) | `platform` |
 | Search | re-fetch |
-| Saved searches (2) ▾ | *(greenlit, §11.6)* |
+| Saved searches (2) ▾ | *(§11.6)* |
 
 Post card: selection **checkbox** + **＋** (add this author to creators) top corners; avatar + author +
 **posted date**; content with **…see more** expand; optional image; engagement row **👍 likes · 💬
@@ -885,19 +889,19 @@ of the scrape set; **Bulk import** = paste many, one per line; **Remove** delete
 > creator/both run. There is no "watch/core" split or "auto-scraped / scraped weekly" wording — it
 > would imply a schedule (and a tier) that don't exist in the UI.
 
-## 11.6 Greenlit additions (build after the core UI restyle)
+## 11.6 Keywords, saved searches & scrape history
 
-Three capabilities the wireframes show, approved for v1 but sequenced after the visual restyle. Each
-is local-only (SQLite), no new external calls.
+Three local-only capabilities the wireframes show (SQLite, no new external calls). Built in Layer 6
+(§12) once the core read/scrape loop and UI are in place.
 
 - **Scrape history** — `listRecentJobs(limit = 20)` on `jobs.repo.ts` + `GET /api/scrape/history`
-  returning the last N `scrape_jobs` rows (they are already persisted; this is read-only). Renders the
-  history table on Screen B.
+  returning the last N `scrape_jobs` rows (read-only; the rows are written by every scrape). Renders
+  the history table on Screen B.
 - **Markets + saved keywords** — a `keywords` table (`id`, `market`, `term`, `created_at`; unique
-  `(market, term)`). `GET/POST/DELETE /api/keywords` grouped by market; markets are the distinct
-  `market` values. Feeds the Keywords editor and prefills the Manual-Scrape keyword set; adds an
-  optional `market` filter to `GET /api/posts` (posts already carry a `market` column).
-- **Saved searches** — a `saved_searches` table (`id`, `name`, `params` JSON, `created_at`).
+  `(market, term)`, §6.5). `GET/POST/DELETE /api/keywords` grouped by market; markets are the distinct
+  `market` values. Feeds the Keywords editor and prefills the Manual-Scrape keyword set; the `market`
+  filter on `GET /api/posts` reads `posts.market`.
+- **Saved searches** — a `saved_searches` table (`id`, `name`, `params` JSON, `created_at`, §6.6).
   `GET/POST/DELETE /api/saved-searches`; selecting one repopulates the filter row. Purely a filter
   preset — **not** a stored result set (no "trends" artefact; N1/N3 still hold).
 
@@ -936,7 +940,7 @@ container context (`.filter-bar__search`, `.manual-scrape > button`, `.creators_
 `.creators__bulk > button`, `.settings__actions button:first-child`) so **no extra markup** is needed.
 Active toggles use `button[aria-pressed='true']` (blue). The post grid is
 `grid-template-columns: repeat(auto-fill, minmax(320px, 1fr))`; list view is a single column. Focus
-styles use a `--primary` ring for accessibility. Keep it token-driven — restyle via tokens, not
+styles use a `--primary` ring for accessibility. Keep it token-driven — tune via tokens, not
 scattered values.
 
 ---
@@ -1100,7 +1104,7 @@ Order within the layer (each independent, can be parallelized):
     Search disabled until Apify+Voyage are set. `ScrapeSettings` composes `SettingsPanel` +
     `CreatorManager` + `ManualScrape` (+ Keywords & History once Layer 6 lands).
 
-### Layer 6 — Greenlit additions (§11.6), after the Layer 5 restyle
+### Layer 6 — Keywords, saved searches & scrape history (§11.6)
 32. **Scrape history** — `listRecentJobs(20)` + `GET /api/scrape/history` + the history table.
 33. **Markets + saved keywords** — `keywords` table, `GET/POST/DELETE /api/keywords`, the Keywords
     editor, `market` filter on `/api/posts`, and Manual-Scrape prefill.
@@ -1127,7 +1131,7 @@ Order within the layer (each independent, can be parallelized):
   test genuinely must change, ask first and explain why. (Project rule.)
 - Mock all external HTTP (Apify, Voyage, Anthropic) with msw. Never hit real APIs in tests.
 - DB tests use `better-sqlite3` `:memory:` databases — real SQL, no mock — so schema + queries
-  are exercised for real. This is the one place we test against the actual engine.
+  are exercised against the actual engine.
 - Fixtures (`/tests/fixtures`): sample Apify LinkedIn item, Apify tweet, Voyage response, and a
   handful of tiny hand-built 1024→(use 4- or 8-dim in tests) embedding vectors for clustering.
   *(Tip: make similarity/clustering functions dimension-agnostic so tests can use 4-dim vectors.)*
@@ -1161,10 +1165,11 @@ secret keys start empty and are filled in by the user during onboarding.
 `DB_PATH` (default `./research.db`, resolved from the project root — where `next dev`/`next start`
 run). `better-sqlite3` writes are synchronous, so a saved key is durable immediately and **persists
 across restarts** — the user enters keys once. Because App-Router route handlers are statically
-prerendered by default, **every route that reads the DB must export `dynamic = 'force-dynamic'`**
-(all `/api/*` do). Without it, `GET /api/settings` gets frozen at build time and the app keeps
-showing onboarding even though keys are saved — a real bug this rule prevents. (Deleting
-`research.db`, or launching from a different working directory, is the only way to "lose" keys.)
+prerendered by default, **every route handler that reads or writes the DB must export
+`export const dynamic = 'force-dynamic'`** so it always runs against the live DB and is never frozen
+at build time — otherwise `GET /api/settings` would serve a build-time snapshot and readiness would
+never reflect saved keys. (Deleting `research.db`, or launching from a different working directory, is
+the only way to "lose" keys.)
 
 ---
 
@@ -1189,28 +1194,16 @@ showing onboarding even though keys are saved — a real bug this rule prevents.
    topically-similar posts. Both respect their threshold sliders.
 10. No network calls to Vercel or Supabase anywhere. Only Apify + Voyage (+ optional Anthropic),
     each using the **user's own** keys.
-
-> **Layer 6 (§11.6) has its own acceptance**, not required for the v1 "done" above: scrape-history
-> table populates from `scrape_jobs`; per-market keyword sets persist and prefill Manual Scrape;
-> saved searches persist and repopulate the filter row.
+11. **Layer 6 (§11.6):** the scrape-history table populates from `scrape_jobs`; per-market keyword
+    sets persist and prefill Manual Scrape; saved searches persist and repopulate the filter row.
 
 ---
 
-## 16. Open questions / deferred
+## 16. Deferred (post-v1)
 
-- Q1 — ~~Twitter actor ids~~ **RESOLVED.** Confirmed from the original `.env.local`: three
-  actors — LinkedIn keyword `harvestapi/linkedin-post-search`, LinkedIn profile
-  `harvestapi/linkedin-profile-posts`, and Twitter `apidojo/tweet-scraper` (one actor, both
-  search & profile modes). Seeded as editable defaults in `settings` (§6.4); the API token is BYO.
-- Q2 — Image descriptions (Claude vision): ship OFF in v1.0, ON in v1.1? (Recommendation: image
-  *embeddings* ON, *descriptions* OFF for v1.)
-- Q3 — Local scheduler (e.g. a "scrape weekly" toggle backed by `node-cron`): **deferred, stays out
-  (N4).** All scraping is manual (§11.5 Manual Scrape); "Core" creators are the default set for a
-  manual run, not an auto-schedule.
-- **Scope note (2026-07):** **markets + saved keywords, saved searches, and scrape history are now
-  IN scope** (Layer 6, §11.6/§12) — approved after review of the reference UI. They are local-only
-  (SQLite), add no external calls, and are **not** the stripped "stored trends" artefact (N1/N3 still
-  hold). A future session should treat them as planned work, not scope creep.
-- Q4 — `sqlite-vec` extension: only if in-JS cosine on 400 candidates ever becomes a bottleneck
-  (it won't at this scale).
-```
+- **Image descriptions (Claude vision):** ship OFF in v1 (image *embeddings* ON, Claude *descriptions*
+  OFF — §7.4). Turning descriptions ON is a v1.1 enrichment; the enrich job already supports it.
+- **Local scheduler / auto-scrape:** out of scope (N4). All scraping is manual (§11.5 Manual Scrape) —
+  there is no `node-cron` or "scrape weekly" toggle.
+- **`sqlite-vec` extension:** only if in-JS cosine over the 400-candidate cap ever becomes a
+  bottleneck (it won't at this scale) — see §3.
