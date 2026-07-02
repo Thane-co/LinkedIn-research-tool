@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { http, HttpResponse } from 'msw'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CreatorManager } from '@/app/CreatorManager'
@@ -38,6 +38,24 @@ describe('CreatorManager', () => {
     await userEvent.type(screen.getByLabelText(/profile url/i), '@janedev')
     await userEvent.click(screen.getByRole('button', { name: /^add$/i }))
     expect(cap.body).toMatchObject({ inputs: ['@janedev'] })
+  })
+
+  it('imports creators from an uploaded CSV (parsed client-side into inputs)', async () => {
+    const cap: { body: { inputs?: string[] } | null } = { body: null }
+    server.use(
+      http.get('*/api/creators', () => HttpResponse.json({ creators: [], tags: [] })),
+      http.post('*/api/creators', async ({ request }) => {
+        cap.body = (await request.json()) as { inputs?: string[] }
+        return HttpResponse.json({ creators: [], tags: [] })
+      }),
+    )
+    render(<CreatorManager />)
+    const csv = 'profile_url\nhttps://www.linkedin.com/in/jane\n@janedev'
+    const file = new File([csv], 'creators.csv', { type: 'text/csv' })
+    await userEvent.upload(screen.getByLabelText(/upload csv/i), file)
+    await waitFor(() =>
+      expect(cap.body).toEqual({ inputs: ['https://www.linkedin.com/in/jane', '@janedev'] }),
+    )
   })
 
   it('deletes a creator via DELETE with its id', async () => {

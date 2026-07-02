@@ -3,7 +3,8 @@
 // every creator is part of the scrape set (tier 'core' under the hood). Add (single or bulk import),
 // Remove. No watch/demote UI (no scheduler, so the tracked-vs-scraped split added nothing).
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ChangeEvent } from 'react'
+import { parseCreatorCsv } from '@/lib/pure/csv'
 
 interface Creator {
   id: string
@@ -13,6 +14,15 @@ interface Creator {
   display_name: string | null
   tags: string // JSON array
 }
+
+/** Read a File as text via FileReader (works in every browser and under jsdom, unlike File.text()). */
+const readFileText = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error ?? new Error('file read failed'))
+    reader.readAsText(file)
+  })
 
 const parseTags = (raw: string): string[] => raw.split(',').map((t) => t.trim()).filter(Boolean)
 const parseTagChips = (json: string): string[] => {
@@ -52,17 +62,30 @@ export function CreatorManager() {
     await load()
   }
 
-  async function bulkImport(): Promise<void> {
-    const inputs = bulk.split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
+  /** POST a list of raw url/@handle strings, then reload. Shared by paste + CSV import. */
+  async function importInputs(inputs: string[]): Promise<void> {
     if (inputs.length === 0) return
     await fetch('/api/creators', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ inputs }),
     })
+    await load()
+  }
+
+  async function bulkImport(): Promise<void> {
+    const inputs = bulk.split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
+    if (inputs.length === 0) return
+    await importInputs(inputs)
     setBulk('')
     setShowBulk(false)
-    await load()
+  }
+
+  async function onCsvFile(e: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = e.target.files?.[0]
+    e.target.value = '' // reset so the same file can be re-selected
+    if (!file) return
+    await importInputs(parseCreatorCsv(await readFileText(file)))
   }
 
   async function remove(id: string): Promise<void> {
@@ -77,9 +100,15 @@ export function CreatorManager() {
       <div className="creators__head">
         <h2>Creators</h2>
         <span className="creators__count">{creators.length} tracked</span>
-        <button type="button" onClick={() => setShowBulk((s) => !s)}>
-          Bulk import
-        </button>
+        <div className="creators__head-actions">
+          <label className="creators__csv">
+            Upload CSV
+            <input type="file" accept=".csv,text/csv" onChange={onCsvFile} />
+          </label>
+          <button type="button" onClick={() => setShowBulk((s) => !s)}>
+            Bulk import
+          </button>
+        </div>
       </div>
 
       {showBulk && (
