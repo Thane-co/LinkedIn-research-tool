@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractMedia } from '@/lib/pure/media'
+import { extractMedia, isPostMedia } from '@/lib/pure/media'
 import type { ApifyPost } from '@/lib/types'
 
 describe('extractMedia', () => {
@@ -71,5 +71,33 @@ describe('extractMedia', () => {
   it('skips images with no url', () => {
     const raw = { postImages: [{}, { url: 'b' }] } as ApifyPost
     expect(extractMedia(raw)).toEqual({ media: { type: 'image', images: ['b'] }, thumbnail: 'b' })
+  })
+})
+
+describe('isPostMedia', () => {
+  it('accepts each valid variant (incl. null optional fields)', () => {
+    expect(isPostMedia({ type: 'image', images: ['a', 'b'] })).toBe(true)
+    expect(isPostMedia({ type: 'video', url: 'v', poster: 'p' })).toBe(true)
+    expect(isPostMedia({ type: 'video', url: 'v', poster: null })).toBe(true)
+    expect(isPostMedia({ type: 'document', url: 'd', title: 't', pages: 3, cover: 'c' })).toBe(true)
+    expect(isPostMedia({ type: 'document', url: 'd', title: null, pages: null, cover: null })).toBe(true)
+  })
+
+  it('rejects non-objects and unknown/missing types', () => {
+    expect(isPostMedia(null)).toBe(false)
+    expect(isPostMedia('nope')).toBe(false)
+    expect(isPostMedia({ type: 'bogus' })).toBe(false)
+    expect(isPostMedia({})).toBe(false)
+  })
+
+  it('rejects a wrong shape within a known type', () => {
+    expect(isPostMedia({ type: 'image', images: [1, 2] })).toBe(false) // non-string element
+    expect(isPostMedia({ type: 'image', images: 'x' })).toBe(false) // not an array
+    expect(isPostMedia({ type: 'video', url: 42, poster: null })).toBe(false) // url not string
+    expect(isPostMedia({ type: 'video', url: 'v', poster: 7 })).toBe(false) // poster wrong type
+    expect(isPostMedia({ type: 'document', url: 5, title: null, pages: null, cover: null })).toBe(false)
+    expect(isPostMedia({ type: 'document', url: 'd', title: 9, pages: null, cover: null })).toBe(false)
+    expect(isPostMedia({ type: 'document', url: 'd', title: null, pages: 'x', cover: null })).toBe(false)
+    expect(isPostMedia({ type: 'document', url: 'd', title: null, pages: null, cover: 3 })).toBe(false)
   })
 })

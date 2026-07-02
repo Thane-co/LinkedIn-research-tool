@@ -46,9 +46,17 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
     if (!res.ok) {
       throw new Error(`Voyage: text embedding batch failed (${res.status})`)
     }
-    const json = (await res.json()) as { data: { embedding: number[]; index: number }[] }
-    const ordered = [...json.data].sort((a, b) => a.index - b.index)
-    for (const d of ordered) out.push(d.embedding)
+    const json = (await res.json()) as { data?: { embedding?: unknown; index?: number }[] }
+    if (!Array.isArray(json.data)) {
+      throw new Error('Voyage: malformed text embedding response (no data array)')
+    }
+    const ordered = [...json.data].sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+    for (const d of ordered) {
+      if (!Array.isArray(d.embedding)) {
+        throw new Error('Voyage: malformed text embedding response (missing embedding)')
+      }
+      out.push(d.embedding as number[])
+    }
   }
 
   return out
@@ -72,6 +80,10 @@ export async function embedImage(url: string): Promise<number[]> {
   if (!res.ok) {
     throw new Error(`Voyage: image embedding failed (${res.status})`)
   }
-  const json = (await res.json()) as { data: { embedding: number[] }[] }
-  return json.data[0]!.embedding
+  const json = (await res.json()) as { data?: { embedding?: unknown }[] }
+  const embedding = json.data?.[0]?.embedding
+  if (!Array.isArray(embedding)) {
+    throw new Error('Voyage: malformed image embedding response (missing embedding)')
+  }
+  return embedding as number[]
 }

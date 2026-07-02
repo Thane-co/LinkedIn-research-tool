@@ -70,6 +70,18 @@ describe('embedTexts', () => {
     await expect(embedTexts(['x'])).rejects.toThrow(/voyage/i)
   })
 
+  it('throws on a malformed 2xx response (data not an array)', async () => {
+    setSettings({ voyage_api_key: 'vk' })
+    server.use(http.post(VOYAGE_TEXT_URL, () => HttpResponse.json({ notdata: true })))
+    await expect(embedTexts(['x'])).rejects.toThrow(/voyage/i)
+  })
+
+  it('throws when a returned item is missing its embedding array', async () => {
+    setSettings({ voyage_api_key: 'vk' })
+    server.use(http.post(VOYAGE_TEXT_URL, () => HttpResponse.json({ data: [{ index: 0 }] })))
+    await expect(embedTexts(['x'])).rejects.toThrow(/voyage/i)
+  })
+
   it('aborts a hung embed batch via its per-fetch timeout instead of blocking forever', async () => {
     vi.useFakeTimers()
     try {
@@ -96,6 +108,12 @@ describe('embedImage', () => {
   })
 
   it('throws when the key is unset', async () => {
+    await expect(embedImage('https://img/1.png')).rejects.toThrow(/voyage/i)
+  })
+
+  it('throws on a malformed 2xx response (empty data / missing embedding)', async () => {
+    setSettings({ voyage_api_key: 'vk' })
+    server.use(http.post(VOYAGE_MULTIMODAL_URL, () => HttpResponse.json({ data: [] })))
     await expect(embedImage('https://img/1.png')).rejects.toThrow(/voyage/i)
   })
 })

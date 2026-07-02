@@ -15,6 +15,31 @@ const seed = (rows: Partial<PostRow>[]): void => {
 const get = (qs = ''): Promise<Response> => GET(new Request(`http://localhost/api/posts${qs}`))
 
 describe('GET /api/posts — paginated mode', () => {
+  it('serializes a valid media object but nulls a valid-JSON wrong-shape one', async () => {
+    seed([
+      { id: 'good', media: JSON.stringify({ type: 'image', images: ['x'] }) },
+      { id: 'bad', media: '{"type":"bogus"}' }, // parses, but not a PostMedia
+    ])
+    const body = await (await get()).json()
+    const byId = Object.fromEntries(body.posts.map((p: { id: string; media: unknown }) => [p.id, p.media]))
+    expect(byId.good).toEqual({ type: 'image', images: ['x'] })
+    expect(byId.bad).toBeNull()
+  })
+
+  it('ignores an unknown timeframe param instead of crashing on an invalid date', async () => {
+    seed([{ id: 'a', posted_at: '2020-01-01T00:00:00.000Z' }])
+    const res = await get('?timeframe=quarter') // not a real Timeframe
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.posts.map((p: { id: string }) => p.id)).toContain('a')
+  })
+
+  it('ignores an unknown platform filter rather than silently returning nothing', async () => {
+    seed([{ id: 'a', platform: 'linkedin' }])
+    const body = await (await get('?platform=myspace')).json()
+    expect(body.posts.map((p: { id: string }) => p.id)).toContain('a')
+  })
+
   it('applies filters and never serializes raw blobs/raw_data', async () => {
     seed([
       { id: 'a', platform: 'linkedin', content: 'ai agents', likes: 100, embedding: vectorToBlob([1, 0, 0, 0]) },

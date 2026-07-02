@@ -8,6 +8,28 @@
 
 import type { ApifyPost, PostMedia } from '@/lib/types'
 
+/** Runtime guard for a stored `media` value (JSON.parse output) — so a corrupt/legacy row that is
+ *  valid JSON but the wrong shape is rejected (→ null) instead of trusted as a PostMedia. */
+export function isPostMedia(v: unknown): v is PostMedia {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  switch (o.type) {
+    case 'image':
+      return Array.isArray(o.images) && o.images.every((i) => typeof i === 'string')
+    case 'video':
+      return typeof o.url === 'string' && (o.poster === null || typeof o.poster === 'string')
+    case 'document':
+      return (
+        typeof o.url === 'string' &&
+        (o.title === null || typeof o.title === 'string') &&
+        (o.pages === null || typeof o.pages === 'number') &&
+        (o.cover === null || typeof o.cover === 'string')
+      )
+    default:
+      return false
+  }
+}
+
 export function extractMedia(raw: ApifyPost): { media: PostMedia | null; thumbnail: string | null } {
   const doc = raw.document
   if (doc?.transcribedDocumentUrl) {

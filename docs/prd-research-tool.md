@@ -1027,8 +1027,11 @@ Order within the layer (each independent, can be parallelized):
    stripped, leading header row dropped. *Tests:* url + `@handle` rows, header skipped, `url,tag,tag`
    → first cell, blank lines/`\r\n` tolerated.
 9d. **`media.ts`** — `extractMedia(raw) → { media, thumbnail }` (§10.3.1): document > video > image >
-   none precedence; thumbnail derivation. *Tests (real shapes):* document (cover + pages), video
-   (poster), single image, carousel (>1), and no-media → `{ null, null }`.
+   none precedence; thumbnail derivation. Also **`isPostMedia(v): v is PostMedia`** — a runtime guard
+   the read path uses on the stored `media` JSON so a valid-JSON but wrong-shape row is rejected (→
+   `null`), not trusted. *Tests (real shapes):* document (cover + pages), video (poster), single image,
+   carousel (>1), no-media → `{ null, null }`; `isPostMedia` accepts each variant and rejects
+   non-objects / unknown types / wrong field types.
 
 ### Layer 1 — Config & types
 10. **`config.ts`** — export **non-secret** constants, thresholds, and **default** actor ids.
@@ -1107,8 +1110,11 @@ Order within the layer (each independent, can be parallelized):
 18. **`voyage.ts`** — `embedTexts(strings[]) → number[][]`, `embedImage(url) → number[]`.
     **Reads key from settings.** Batches text at 100 and **reorders each batch's vectors by the
     response `index`** before concatenating (preserves input order). Each request goes through
-    `fetchWithTimeout` (§10.7). *Tests:* msw-mock Voyage; batch of 100; out-of-order response
-    reordered; error per-batch throws; **a hung batch aborts** via its timeout; throws when key unset.
+    `fetchWithTimeout` (§10.7). **Validates the response shape** — a 2xx body whose `data` isn't an
+    array (or whose items lack an `embedding` array) **throws** rather than passing a corrupt vector
+    into the clustering pipeline. *Tests:* msw-mock Voyage; batch of 100; out-of-order response
+    reordered; error per-batch throws; **malformed 2xx (no data / missing embedding) throws**; **a
+    hung batch aborts** via its timeout; throws when key unset.
 19. **`anthropic.ts`** *(optional)* — `describeImage(url) → string | null`. Reads key from settings.
     **Contract:** returns `null` when the key is unset (feature disabled — the enrich job skips
     description); **throws** on an HTTP error so the enrich job can log it non-fatally (§7.4). Mocked.
@@ -1135,10 +1141,15 @@ Order within the layer (each independent, can be parallelized):
 23. **`/api/creators`** — GET/POST/DELETE. *Tests:* add by LinkedIn url (normalized, slug derived) and
     by `@handle`; auto-fill `display_name` from posts; add-many + idempotent re-add; `400` on no
     valid input; list + tag/platform filter; delete (and `400` without id).
-24. **`/api/posts`** — paginated + grouping modes. *Tests:* each filter; sort modes; `hasMore`
-    exactness; BLOBs/`raw_data` stripped; `availableAuthors` always present; `groupByImage` returns
-    `imageGroups` + full member posts; `discoverTrends` returns `contentClusters`;
-    400-cap respected.
+24. **`/api/posts`** — paginated + grouping modes. Query parsing **whitelists the enum params**
+    (`platform`/`timeframe`/`sort`): an unknown value is **ignored**, not blindly cast — an invalid
+    `timeframe` would otherwise crash the date math, a bad `platform` would silently filter out every
+    row. Serialization runs the `media` JSON through **`isPostMedia`** (§10.3.1), so a valid-JSON but
+    wrong-shape value becomes `null` rather than a bogus object. *Tests:* each filter; sort modes;
+    `hasMore` exactness; BLOBs/`raw_data` stripped; `availableAuthors` always present; **unknown
+    `timeframe`/`platform` ignored (no crash / no silent empty)**; **wrong-shape `media` → null**;
+    `groupByImage` returns `imageGroups` + full member posts; `discoverTrends` returns
+    `contentClusters`; 400-cap respected.
 25. **`/api/scrape` + `/api/scrape/[id]`** — start creates the job and returns `202 { jobId }`
     immediately (fires `runScrape` with that id, unawaited); status GET returns the row or `404`.
     *Tests:* `412 { needs }` when Apify/Voyage keys missing (lists only the still-missing ones);

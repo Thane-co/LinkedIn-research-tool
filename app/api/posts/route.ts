@@ -12,10 +12,22 @@ import {
 } from '@/lib/db/posts.repo'
 import { findContentClusters } from '@/lib/pure/content-clusters'
 import { findSimilarImageGroups } from '@/lib/pure/image-groups'
+import { isPostMedia } from '@/lib/pure/media'
 import type { PostMedia, PostRow, SortMode, Timeframe } from '@/lib/types'
 
 // Reads the live DB — never statically prerender/cache.
 export const dynamic = 'force-dynamic'
+
+const PLATFORMS = ['all', 'linkedin', 'twitter'] as const
+const TIMEFRAMES: readonly Timeframe[] = ['24h', '3d', 'week', 'month', '3months', 'custom']
+const SORTS: readonly SortMode[] = ['recent', 'likes', 'xfactor']
+
+/** Return `raw` only if it's one of `allowed`, else undefined — so an unknown enum param is ignored,
+ *  not blindly trusted. An invalid `timeframe` would otherwise crash the date math; a bad `platform`
+ *  would silently filter out every row. */
+function oneOf<T extends string>(allowed: readonly T[], raw: string | null): T | undefined {
+  return raw !== null && (allowed as readonly string[]).includes(raw) ? (raw as T) : undefined
+}
 
 /** Parse the shared filter set from the query string (PRD §11.1). */
 function parseFilters(sp: URLSearchParams): PostFilters {
@@ -28,17 +40,17 @@ function parseFilters(sp: URLSearchParams): PostFilters {
     return parts && parts.length > 0 ? parts : undefined
   }
   return {
-    platform: (sp.get('platform') as PostFilters['platform']) ?? undefined,
+    platform: oneOf(PLATFORMS, sp.get('platform')),
     keywords: list('keywords'),
     authors: list('authors'),
     minLikes: num('minLikes'),
     minShares: num('minShares'),
     minXFactor: num('minXFactor'),
-    timeframe: (sp.get('timeframe') as Timeframe | null) ?? undefined,
+    timeframe: oneOf(TIMEFRAMES, sp.get('timeframe')),
     dateFrom: sp.get('dateFrom') ?? undefined,
     dateTo: sp.get('dateTo') ?? undefined,
     market: sp.get('market') || undefined,
-    sort: (sp.get('sort') as SortMode | null) ?? undefined,
+    sort: oneOf(SORTS, sp.get('sort')),
     page: num('page'),
     pageSize: num('pageSize'),
   }
@@ -52,7 +64,8 @@ function serializePost(row: PostRow): Omit<PostRow, 'embedding' | 'image_embeddi
   let parsed: PostMedia | null = null
   if (media) {
     try {
-      parsed = JSON.parse(media) as PostMedia
+      const candidate: unknown = JSON.parse(media)
+      parsed = isPostMedia(candidate) ? candidate : null
     } catch {
       parsed = null
     }
