@@ -1151,9 +1151,9 @@ Order within the layer (each independent, can be parallelized):
     by `@handle`; auto-fill `display_name` from posts; add-many + idempotent re-add; `400` on no
     valid input; list + tag/platform filter; delete (and `400` without id).
 24. **`/api/posts`** — paginated + grouping modes. Query parsing **whitelists the enum params**
-    (`platform`/`timeframe`/`sort`): an unknown value is **ignored**, not blindly cast — an invalid
-    `timeframe` would otherwise crash the date math, a bad `platform` would silently filter out every
-    row. Serialization runs the `media` JSON through **`isPostMedia`** (§10.3.1), so a valid-JSON but
+    (`platform`/`timeframe`/`sort`): an unknown value is **ignored**, not blindly cast (an invalid
+    `timeframe` fed to the date math yields an invalid date; an unknown `platform` matches no rows).
+    Serialization runs the `media` JSON through **`isPostMedia`** (§10.3.1), so a valid-JSON but
     wrong-shape value becomes `null` rather than a bogus object. *Tests:* each filter; sort modes;
     `hasMore` exactness; BLOBs/`raw_data` stripped; `availableAuthors` always present; **unknown
     `timeframe`/`platform` ignored (no crash / no silent empty)**; **wrong-shape `media` → null**;

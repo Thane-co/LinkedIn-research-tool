@@ -116,7 +116,7 @@ probably scope creep.
 - All API routes return `NextResponse.json()`.
 - **Client components fetch through `apiFetch()` (`lib/api-client.ts`), never bare `fetch`.** It throws
   an `ApiError` on non-2xx/network/malformed responses; the component catches it and renders an error
-  state (`role="alert"`). A bare `setState(await res.json())` is a silent failure — don't reintroduce it.
+  state (`role="alert"`). A bare `setState(await res.json())` is a silent failure — never write one.
 - **Local security posture (unauthenticated localhost server).** The dev/start server binds to
   `127.0.0.1` (loopback, not the LAN). **Every mutating route handler calls `rejectCrossOrigin(req)`
   first** (`lib/api-guard.ts`, CSRF guard). Render scraped/untrusted urls as hrefs only via
