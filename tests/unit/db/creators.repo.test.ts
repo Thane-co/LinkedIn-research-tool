@@ -68,6 +68,14 @@ describe('listCreators', () => {
   it('filters by tag', () => {
     expect(listCreators({ tag: 'infra' }).creators).toHaveLength(1)
   })
+
+  it('does not crash on a corrupt tags value — skips it and still lists every creator', () => {
+    // Force one row's tags column to invalid JSON, then confirm the whole list survives.
+    getDb().prepare("UPDATE creators SET tags = 'not json' WHERE profile_url = 'https://x.com/joe'").run()
+    const { creators, tags } = listCreators()
+    expect(creators).toHaveLength(2) // the corrupt row is still listed
+    expect([...tags].sort()).toEqual(['ai']) // its tags are skipped; good rows' tags remain
+  })
 })
 
 describe('deleteCreator', () => {

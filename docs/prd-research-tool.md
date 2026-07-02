@@ -1076,10 +1076,11 @@ Order within the layer (each independent, can be parallelized):
     `reEmbed`/`countUnembedded`, available-authors distinctness + avatar join.
 14. **`db/creators.repo.ts`** — surface is `upsertCreator(new)` (insert, or idempotently update the
     display fields when the `profile_url` already exists — no duplicate row; every creator is `core`),
-    `listCreators(filter?)` → `{ creators, tags }` (distinct tags across ALL creators),
-    `deleteCreator(id)`. Storage only — platform detection / url normalization / author_id
+    `listCreators(filter?)` → `{ creators, tags }` (distinct tags across ALL creators — a **corrupt
+    `tags` JSON on one row is logged and skipped, never thrown**, so one bad row can't 500 the whole
+    list), `deleteCreator(id)`. Storage only — platform detection / url normalization / author_id
     derivation happen at the route layer (§11.2) via `lib/pure/url.ts`. *Tests:* insert, unique url,
-    idempotent re-add, tag filter/extraction, delete.
+    idempotent re-add, tag filter/extraction, corrupt-tags resilience, delete.
 15. **`db/jobs.repo.ts`** — `createJob({mode, platforms, market, params})` (status `running`,
     serializes `platforms`/`params` to JSON), `finishJob(id, {status:'succeeded', stats} | {status:'failed', error})`,
     `getJob(id)` → row | null.

@@ -97,11 +97,19 @@ export function listCreators(filter?: {
     .prepare(`SELECT ${COLUMNS} FROM creators ${where} ORDER BY added_at DESC`)
     .all(...params) as CreatorRow[]
 
-  // Distinct tags across ALL creators (unfiltered), for the filter dropdown.
-  const allTagRows = getDb().prepare('SELECT tags FROM creators').all() as { tags: string }[]
+  // Distinct tags across ALL creators (unfiltered), for the filter dropdown. A corrupt tags value on
+  // one row must never take down the whole list — log it and skip, don't throw (no silent failures).
+  const allTagRows = getDb().prepare('SELECT id, tags FROM creators').all() as { id: string; tags: string }[]
   const tagSet = new Set<string>()
-  for (const { tags } of allTagRows) {
-    for (const t of JSON.parse(tags) as string[]) tagSet.add(t)
+  for (const { id, tags } of allTagRows) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(tags)
+    } catch {
+      console.error(`listCreators: skipping corrupt tags JSON on creator ${id}`)
+      continue
+    }
+    if (Array.isArray(parsed)) for (const t of parsed) if (typeof t === 'string') tagSet.add(t)
   }
 
   return { creators, tags: [...tagSet] }
