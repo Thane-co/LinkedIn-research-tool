@@ -251,6 +251,26 @@ button[aria-pressed='true'] {
   color: var(--primary);
 }
 
+/* Shared error banner for failed API/DB requests (role="alert"), so a failure is never silent. */
+.app-error,
+.dashboard__error,
+.creators__error,
+.keywords__error,
+.history__error,
+.settings__error,
+.manual-scrape__error {
+  background: var(--red-bg);
+  color: var(--red-fg);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  font-weight: 600;
+}
+.app-error button {
+  margin-top: 8px;
+}
+
 .filter-bar {
   display: flex;
   flex-wrap: wrap;

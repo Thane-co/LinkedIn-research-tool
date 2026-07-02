@@ -114,6 +114,9 @@ probably scope creep.
 
 ## Coding standards
 - All API routes return `NextResponse.json()`.
+- **Client components fetch through `apiFetch()` (`lib/api-client.ts`), never bare `fetch`.** It throws
+  an `ApiError` on non-2xx/network/malformed responses; the component catches it and renders an error
+  state (`role="alert"`). A bare `setState(await res.json())` is a silent failure — don't reintroduce it.
 - **Every route handler that reads or writes the DB exports `export const dynamic = 'force-dynamic'`**
   — App-Router prerenders handlers by default, which would freeze DB reads (e.g. settings readiness)
   at build time (PRD §11/§14).

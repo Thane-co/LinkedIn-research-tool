@@ -3,6 +3,7 @@
 // Read-only. Fetched = keyword_raw + creator_raw; New = inserted.
 
 import { useEffect, useState } from 'react'
+import { apiFetch } from '@/lib/api-client'
 
 interface JobRow {
   id: string
@@ -40,17 +41,22 @@ const when = (iso: string): string => iso.slice(0, 16).replace('T', ' ')
 
 export function ScrapeHistory() {
   const [jobs, setJobs] = useState<JobRow[]>([])
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    void fetch('/api/scrape/history')
-      .then((r) => r.json())
-      .then((b: { jobs: JobRow[] }) => setJobs(b.jobs))
+    apiFetch<{ jobs: JobRow[] }>('/api/scrape/history')
+      .then((b) => setJobs(b.jobs))
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load history'))
   }, [])
 
   return (
     <section className="history" aria-label="scrape history">
       <h3>Scrape History</h3>
-      {jobs.length === 0 ? (
+      {error ? (
+        <p className="history__error" role="alert">
+          Couldn’t load history: {error}
+        </p>
+      ) : jobs.length === 0 ? (
         <p className="placeholder">No scrapes yet.</p>
       ) : (
         <table className="history__table">

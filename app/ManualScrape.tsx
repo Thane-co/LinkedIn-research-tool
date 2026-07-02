@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from 'react'
 import type { ScrapeMode, Timeframe } from '@/lib/types'
+import { ApiError, apiFetch } from '@/lib/api-client'
 
 type Source = 'both' | 'creator' | 'keyword'
 type Pill =
@@ -29,14 +30,16 @@ export function ManualScrape({ pollIntervalMs = 1500 }: { pollIntervalMs?: numbe
   const [timeframe, setTimeframe] = useState<Timeframe>('week')
   const [market, setMarket] = useState('') // '' = all markets
   const [pill, setPill] = useState<Pill>({ status: 'idle' })
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
-    void fetch('/api/creators')
-      .then((r) => r.json())
-      .then((b: { creators: unknown[] }) => setCoreCount(b.creators.length))
-    void fetch('/api/keywords')
-      .then((r) => r.json())
-      .then((b: { groups: KeywordGroup[] }) => setGroups(b.groups))
+    const onFail = (e: unknown): void => setLoadError(e instanceof Error ? e.message : 'Failed to load')
+    apiFetch<{ creators: unknown[] }>('/api/creators')
+      .then((b) => setCoreCount(b.creators.length))
+      .catch(onFail)
+    apiFetch<{ groups: KeywordGroup[] }>('/api/keywords')
+      .then((b) => setGroups(b.groups))
+      .catch(onFail)
   }, [])
 
   const keywords = (market ? groups.filter((g) => g.market === market) : groups).flatMap((g) =>
@@ -44,38 +47,50 @@ export function ManualScrape({ pollIntervalMs = 1500 }: { pollIntervalMs?: numbe
   )
 
   async function poll(jobId: string): Promise<void> {
-    const res = await fetch(`/api/scrape/${jobId}`)
-    const job = (await res.json()) as { status: string; inserted?: number; error?: string }
-    if (job.status === 'running') {
-      setPill({ status: 'running' })
-      setTimeout(() => void poll(jobId), pollIntervalMs)
-    } else if (job.status === 'succeeded') {
-      setPill({ status: 'succeeded', inserted: job.inserted ?? 0 })
-    } else {
-      setPill({ status: 'failed', error: job.error })
+    try {
+      const job = await apiFetch<{ status: string; inserted?: number; error?: string }>(`/api/scrape/${jobId}`)
+      if (job.status === 'running') {
+        setPill({ status: 'running' })
+        setTimeout(() => void poll(jobId), pollIntervalMs)
+      } else if (job.status === 'succeeded') {
+        setPill({ status: 'succeeded', inserted: job.inserted ?? 0 })
+      } else {
+        setPill({ status: 'failed', error: job.error })
+      }
+    } catch (e) {
+      setPill({ status: 'failed', error: e instanceof Error ? e.message : 'Scrape failed' })
     }
   }
 
   async function run(): Promise<void> {
     setPill({ status: 'running' })
     const platforms = platform === 'all' ? ['linkedin', 'twitter'] : [platform]
-    const res = await fetch('/api/scrape', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ mode: source as ScrapeMode, platforms, timeframe, market: market || undefined, keywords }),
-    })
-    if (res.status === 412) {
-      const { needs } = (await res.json()) as { needs: string[] }
-      setPill({ status: 'blocked', needs })
-      return
+    try {
+      const { jobId } = await apiFetch<{ jobId: string }>('/api/scrape', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: source as ScrapeMode, platforms, timeframe, market: market || undefined, keywords }),
+      })
+      await poll(jobId)
+    } catch (e) {
+      // A 412 is the expected "keys not set" signal — surface the needs list, not a failure.
+      if (e instanceof ApiError && e.status === 412) {
+        const needs = (e.body as { needs?: string[] } | null)?.needs ?? []
+        setPill({ status: 'blocked', needs })
+      } else {
+        setPill({ status: 'failed', error: e instanceof Error ? e.message : 'Scrape failed' })
+      }
     }
-    const { jobId } = (await res.json()) as { jobId: string }
-    await poll(jobId)
   }
 
   return (
     <section className="manual-scrape">
       <h3>Manual Scrape</h3>
+      {loadError && (
+        <p className="manual-scrape__error" role="alert">
+          Couldn’t load scrape inputs: {loadError}
+        </p>
+      )}
       <div className="manual-scrape__controls">
         <label>
           Source

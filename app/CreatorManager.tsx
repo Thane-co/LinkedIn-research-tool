@@ -5,6 +5,7 @@
 
 import { useEffect, useState, type ChangeEvent } from 'react'
 import { parseCreatorCsv } from '@/lib/pure/csv'
+import { apiFetch } from '@/lib/api-client'
 
 interface Creator {
   id: string
@@ -39,11 +40,18 @@ export function CreatorManager() {
   const [tags, setTags] = useState('')
   const [bulk, setBulk] = useState('')
   const [showBulk, setShowBulk] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const fail = (e: unknown): void => setError(e instanceof Error ? e.message : 'Something went wrong')
 
   async function load(): Promise<void> {
-    const res = await fetch('/api/creators')
-    const body = (await res.json()) as { creators: Creator[] }
-    setCreators(body.creators)
+    try {
+      const body = await apiFetch<{ creators: Creator[] }>('/api/creators')
+      setCreators(body.creators)
+      setError(null)
+    } catch (e) {
+      fail(e)
+    }
   }
   useEffect(() => {
     void load()
@@ -52,25 +60,33 @@ export function CreatorManager() {
   async function add(): Promise<void> {
     const input = url.trim()
     if (!input) return
-    await fetch('/api/creators', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ inputs: [input], tags: parseTags(tags) }),
-    })
-    setUrl('')
-    setTags('')
-    await load()
+    try {
+      await apiFetch('/api/creators', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ inputs: [input], tags: parseTags(tags) }),
+      })
+      setUrl('')
+      setTags('')
+      await load()
+    } catch (e) {
+      fail(e)
+    }
   }
 
   /** POST a list of raw url/@handle strings, then reload. Shared by paste + CSV import. */
   async function importInputs(inputs: string[]): Promise<void> {
     if (inputs.length === 0) return
-    await fetch('/api/creators', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ inputs }),
-    })
-    await load()
+    try {
+      await apiFetch('/api/creators', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ inputs }),
+      })
+      await load()
+    } catch (e) {
+      fail(e)
+    }
   }
 
   async function bulkImport(): Promise<void> {
@@ -89,8 +105,12 @@ export function CreatorManager() {
   }
 
   async function remove(id: string): Promise<void> {
-    await fetch(`/api/creators?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
-    await load()
+    try {
+      await apiFetch(`/api/creators?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+      await load()
+    } catch (e) {
+      fail(e)
+    }
   }
 
   const nameOf = (c: Creator): string => c.display_name ?? c.author_id ?? c.profile_url
@@ -110,6 +130,12 @@ export function CreatorManager() {
           </button>
         </div>
       </div>
+
+      {error && (
+        <p className="creators__error" role="alert">
+          {error}
+        </p>
+      )}
 
       {showBulk && (
         <div className="creators__bulk">

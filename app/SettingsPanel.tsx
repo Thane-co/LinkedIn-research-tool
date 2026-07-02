@@ -4,6 +4,7 @@
 // (no keys) the app opens here and gates Scrape until Apify+Voyage are set.
 
 import { useState } from 'react'
+import { apiFetch } from '@/lib/api-client'
 
 export interface SettingsView {
   settings: Record<string, string> // masked: secrets are 'set' | 'unset'
@@ -34,6 +35,7 @@ export function SettingsPanel({ view, onSaved }: { view: SettingsView; onSaved?:
   )
   const [results, setResults] = useState<TestResults | null>(null)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const gated = !ready.apify || !ready.voyage
 
@@ -48,25 +50,31 @@ export function SettingsPanel({ view, onSaved }: { view: SettingsView; onSaved?:
       if (v !== (settings[f.key] ?? '')) partial[f.key] = v // only send changed actor ids
     }
     setBusy(true)
+    setError(null)
     try {
-      const res = await fetch('/api/settings', {
+      const next = await apiFetch<SettingsView>('/api/settings', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(partial),
       })
-      const next = (await res.json()) as SettingsView
       setSettings(next.settings)
       setReady(next.ready)
       setSecrets({})
       onSaved?.(next)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Save failed')
     } finally {
       setBusy(false)
     }
   }
 
   async function testConnection() {
-    const res = await fetch('/api/settings/test', { method: 'POST' })
-    setResults((await res.json()) as TestResults)
+    setError(null)
+    try {
+      setResults(await apiFetch<TestResults>('/api/settings/test', { method: 'POST' }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Test failed')
+    }
   }
 
   return (
@@ -108,6 +116,12 @@ export function SettingsPanel({ view, onSaved }: { view: SettingsView; onSaved?:
           Test connection
         </button>
       </div>
+
+      {error && (
+        <p className="settings__error" data-testid="settings-error" role="alert">
+          {error}
+        </p>
+      )}
 
       {results && (
         <ul className="settings__results">

@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { DashboardFilterBar, type AuthorOption, type Filters } from '@/app/DashboardFilterBar'
 import { PostCard, type PostCardPost } from '@/app/PostCard'
+import { apiFetch } from '@/lib/api-client'
 
 interface ImageGroup {
   postIds: string[]
@@ -105,10 +106,15 @@ function GroupPanel({
 export function DashboardClient() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
   const [data, setData] = useState<PostsResponse>({ posts: [], total: 0, availableAuthors: [], hasMore: false })
+  const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
-    const res = await fetch(`/api/posts?${toQuery(filters)}`)
-    setData((await res.json()) as PostsResponse)
+    try {
+      setError(null)
+      setData(await apiFetch<PostsResponse>(`/api/posts?${toQuery(filters)}`))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load posts')
+    }
   }, [filters])
 
   useEffect(() => {
@@ -172,6 +178,12 @@ export function DashboardClient() {
       </header>
 
       <DashboardFilterBar filters={filters} availableAuthors={data.availableAuthors} onChange={setFilters} onSearch={load} />
+
+      {error && (
+        <p className="dashboard__error" role="alert">
+          Couldn’t load posts: {error}
+        </p>
+      )}
 
       {data.imageGroups ? (
         data.imageGroups.length === 0 ? (

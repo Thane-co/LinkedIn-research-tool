@@ -25,6 +25,13 @@ describe('SettingsPanel', () => {
     expect(screen.getByTestId('settings-gate')).toBeInTheDocument()
   })
 
+  it('surfaces a save failure instead of silently reporting success', async () => {
+    server.use(http.put('*/api/settings', () => new HttpResponse(null, { status: 500 })))
+    render(<SettingsPanel view={view()} />)
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(await screen.findByTestId('settings-error')).toHaveTextContent(/failed|error|couldn/i)
+  })
+
   it('hides the gate once both required providers are ready', () => {
     render(<SettingsPanel view={view({ ready: { apify: true, voyage: true, anthropic: false } })} />)
     expect(screen.queryByTestId('settings-gate')).not.toBeInTheDocument()

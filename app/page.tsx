@@ -3,28 +3,44 @@
 // route between the Search screen and the Scrape Settings screen. On first run (keys missing) the app
 // opens on Settings and Search is disabled until Apify + Voyage are set.
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { DashboardClient } from '@/app/DashboardClient'
 import { ScrapeSettings } from '@/app/ScrapeSettings'
 import type { SettingsView } from '@/app/SettingsPanel'
+import { apiFetch } from '@/lib/api-client'
 
 export default function Page() {
   const [view, setView] = useState<SettingsView | null>(null)
   const [route, setRoute] = useState<'search' | 'settings'>('settings')
+  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    void fetch('/api/settings')
-      .then((r) => r.json())
-      .then((v: SettingsView) => {
+  const load = useCallback(() => {
+    setError(null)
+    apiFetch<SettingsView>('/api/settings')
+      .then((v) => {
         setView(v)
         setRoute(v.ready.apify && v.ready.voyage ? 'search' : 'settings')
       })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load settings'))
   }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
 
   if (!view) {
     return (
       <main>
-        <p>Loading…</p>
+        {error ? (
+          <div className="app-error" role="alert">
+            <p>Couldn’t load settings: {error}</p>
+            <button type="button" onClick={load}>
+              Retry
+            </button>
+          </div>
+        ) : (
+          <p>Loading…</p>
+        )}
       </main>
     )
   }

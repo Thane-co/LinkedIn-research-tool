@@ -1144,6 +1144,21 @@ Order within the layer (each independent, can be parallelized):
     running job created + `runScrape` handed the `jobId`; `[id]` returns the row and 404s on unknown.
 
 ### Layer 5 — UI (component + light e2e). Match the §11.5 wireframes.
+
+**Client data access (`lib/api-client.ts`).** Every component talks to `/api` through one wrapper,
+`apiFetch<T>(input, init?)`, never `fetch` directly. It **throws an `ApiError` (carrying `status` +
+the parsed error `body`) on a network failure, a non-2xx status, or a malformed JSON body**, so a
+failed request can never be silently swallowed (a bare `setState(await res.json())` would leave the UI
+frozen on its initial state — blank list, endless "Loading…", or a stuck "Scraping…" pill). Each
+component catches it and renders an **error state** with `role="alert"`: `page` shows an error + a
+**Retry** (never an endless "Loading…"); read views (Dashboard, Creators, Keywords, History) show an
+error banner in place of/above their content; `SettingsPanel` surfaces a save/test failure instead of
+falsely reporting success; `ManualScrape` sets the pill to **failed** on a run/poll error. The one
+non-error non-2xx is `POST /api/scrape` → **412**: `run()` catches the `ApiError`, reads `body.needs`,
+and shows the "Add … in Settings" (`blocked`) pill. *Tests:* `apiFetch` returns JSON on 2xx and throws
+`ApiError` with the right `status`/message/body on 5xx, non-JSON, network error, and malformed 2xx;
+each component renders its `role="alert"` error state when its request 500s.
+
 26. **`SettingsPanel` + onboarding gate** — paste Apify token, Voyage key, optional Anthropic
     key; edit actor ids; "Test connection" per provider (green/red). On first run (no keys), the
     app opens here and gates Scrape until Apify+Voyage are set. *Tests:* save calls PUT; gate

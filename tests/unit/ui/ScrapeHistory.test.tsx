@@ -21,6 +21,13 @@ const job = (over: Record<string, unknown> = {}) => ({
 afterEach(() => server.resetHandlers())
 
 describe('ScrapeHistory', () => {
+  it('shows an error state (not the empty state) when the history load fails', async () => {
+    server.use(http.get('*/api/scrape/history', () => new HttpResponse(null, { status: 500 })))
+    render(<ScrapeHistory />)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load|failed|error/i)
+    expect(screen.queryByText(/no scrapes yet/i)).not.toBeInTheDocument()
+  })
+
   it('renders a row per run with fetched (raw sum) and new (inserted) counts', async () => {
     server.use(http.get('*/api/scrape/history', () => HttpResponse.json({ jobs: [job()] })))
     render(<ScrapeHistory />)

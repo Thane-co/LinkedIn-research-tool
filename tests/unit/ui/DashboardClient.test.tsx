@@ -35,6 +35,12 @@ const postsResponse = (posts: unknown[], total = posts.length) => ({
 afterEach(() => server.resetHandlers())
 
 describe('DashboardClient', () => {
+  it('shows an error banner (not a silent blank) when the posts request fails', async () => {
+    server.use(http.get('*/api/posts', () => new HttpResponse(null, { status: 500 })))
+    render(<DashboardClient />)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load|failed|error/i)
+  })
+
   it('fetches posts on mount and shows the result count', async () => {
     server.use(http.get('*/api/posts', () => HttpResponse.json(postsResponse([post()], 24))))
     render(<DashboardClient />)

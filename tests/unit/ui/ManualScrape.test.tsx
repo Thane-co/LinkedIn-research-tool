@@ -18,6 +18,13 @@ beforeEach(() => {
 afterEach(() => server.resetHandlers())
 
 describe('ManualScrape', () => {
+  it('marks the pill failed when the scrape request errors (non-412)', async () => {
+    server.use(http.post('*/api/scrape', () => new HttpResponse(null, { status: 500 })))
+    render(<ManualScrape />)
+    await userEvent.click(screen.getByRole('button', { name: /run scrape now/i }))
+    expect(await screen.findByText(/scrape failed/i)).toBeInTheDocument()
+  })
+
   it('runs a scrape and shows the completion pill', async () => {
     server.use(
       http.post('*/api/scrape', () => HttpResponse.json({ jobId: 'j1' }, { status: 202 })),

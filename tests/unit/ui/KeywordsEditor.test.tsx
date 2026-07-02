@@ -14,6 +14,12 @@ const groups = (over?: unknown) =>
 afterEach(() => server.resetHandlers())
 
 describe('KeywordsEditor', () => {
+  it('shows an error state when the keywords load fails', async () => {
+    server.use(http.get('*/api/keywords', () => new HttpResponse(null, { status: 500 })))
+    render(<KeywordsEditor />)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load|failed|error/i)
+  })
+
   it('loads and renders markets with their term chips', async () => {
     server.use(http.get('*/api/keywords', () => HttpResponse.json({ groups: groups() })))
     render(<KeywordsEditor />)

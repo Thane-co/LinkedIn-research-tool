@@ -19,6 +19,12 @@ const creator = (over: Record<string, unknown> = {}) => ({
 afterEach(() => server.resetHandlers())
 
 describe('CreatorManager', () => {
+  it('shows an error state (not a silent blank) when the creators load fails', async () => {
+    server.use(http.get('*/api/creators', () => new HttpResponse(null, { status: 500 })))
+    render(<CreatorManager />)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load|failed|error/i)
+  })
+
   it('loads and renders the creator list on mount', async () => {
     server.use(http.get('*/api/creators', () => HttpResponse.json({ creators: [creator()], tags: [] })))
     render(<CreatorManager />)

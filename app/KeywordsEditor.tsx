@@ -4,6 +4,7 @@
 // creates a local empty group the user can then fill.
 
 import { useEffect, useState } from 'react'
+import { apiFetch } from '@/lib/api-client'
 
 interface KeywordRow {
   id: string
@@ -20,11 +21,18 @@ export function KeywordsEditor() {
   const [localMarkets, setLocalMarkets] = useState<string[]>([])
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [newMarket, setNewMarket] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const fail = (e: unknown): void => setError(e instanceof Error ? e.message : 'Something went wrong')
 
   async function load(): Promise<void> {
-    const res = await fetch('/api/keywords')
-    const body = (await res.json()) as { groups: KeywordGroup[] }
-    setGroups(body.groups)
+    try {
+      const body = await apiFetch<{ groups: KeywordGroup[] }>('/api/keywords')
+      setGroups(body.groups)
+      setError(null)
+    } catch (e) {
+      fail(e)
+    }
   }
   useEffect(() => {
     void load()
@@ -33,24 +41,36 @@ export function KeywordsEditor() {
   async function addKeyword(market: string): Promise<void> {
     const term = (drafts[market] ?? '').trim()
     if (!term) return
-    await fetch('/api/keywords', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ market, term }),
-    })
-    setDrafts((d) => ({ ...d, [market]: '' }))
-    await load()
+    try {
+      await apiFetch('/api/keywords', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ market, term }),
+      })
+      setDrafts((d) => ({ ...d, [market]: '' }))
+      await load()
+    } catch (e) {
+      fail(e)
+    }
   }
 
   async function removeKeyword(id: string): Promise<void> {
-    await fetch(`/api/keywords?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
-    await load()
+    try {
+      await apiFetch(`/api/keywords?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+      await load()
+    } catch (e) {
+      fail(e)
+    }
   }
 
   async function removeMarket(market: string): Promise<void> {
     setLocalMarkets((m) => m.filter((x) => x !== market))
-    await fetch(`/api/keywords?market=${encodeURIComponent(market)}`, { method: 'DELETE' })
-    await load()
+    try {
+      await apiFetch(`/api/keywords?market=${encodeURIComponent(market)}`, { method: 'DELETE' })
+      await load()
+    } catch (e) {
+      fail(e)
+    }
   }
 
   function addMarket(): void {
@@ -66,6 +86,12 @@ export function KeywordsEditor() {
     <section className="keywords" aria-label="keywords">
       <h3>Keywords</h3>
       <p className="placeholder">Per-market keyword sets — used to prefill a manual scrape.</p>
+
+      {error && (
+        <p className="keywords__error" role="alert">
+          {error}
+        </p>
+      )}
 
       {markets.map((market) => (
         <div key={market} className="keywords__market">

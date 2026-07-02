@@ -15,6 +15,13 @@ const emptyPosts = { posts: [], total: 0, page: 1, pageSize: 50, hasMore: false,
 afterEach(() => server.resetHandlers())
 
 describe('Page (readiness gate)', () => {
+  it('shows an error with a retry (not an endless "Loading…") when settings fail to load', async () => {
+    server.use(http.get('*/api/settings', () => new HttpResponse(null, { status: 500 })))
+    render(<Page />)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load settings/i)
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
+  })
+
   it('opens the Scrape Settings screen (onboarding gate) when required keys are missing', async () => {
     server.use(
       http.get('*/api/settings', () => HttpResponse.json(settings({ apify: false, voyage: false }))),
