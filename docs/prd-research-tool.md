@@ -164,6 +164,7 @@ Dependency rule: **arrows point downward only.** A module never imports from a l
       /image-groups.ts           ← union-find image grouping                 (Layer 0)
       /content-clusters.ts       ← average-linkage content clustering        (Layer 0)
       /url.ts                    ← extractActivityId, normalizeProfileUrl, slug/handle (Layer 0)
+      /csv.ts                    ← parseCreatorCsv (bulk-import CSV → inputs[]) (Layer 0)
       /lang.ts                   ← isLikelyNonEnglish                         (Layer 0)
       /embed-text.ts             ← buildEmbeddingText (content + image desc)  (Layer 0)
       /vector-blob.ts            ← Float32 ⇄ BLOB serialize/deserialize       (Layer 0)
@@ -770,6 +771,12 @@ Platform detection / url normalization / `author_id` derivation happen **at the 
   url/handle are skipped; a body with **zero** valid entries → `400`. Re-adding an existing creator
   is **idempotent** — it updates the display fields and never creates a duplicate. Returns the
   refreshed `{ creators, tags }`.
+- **Bulk add is client-side** (§12 step 29): the paste box **and a CSV upload** both produce the
+  `inputs[]` array sent to this same `POST` — there is **no file-upload endpoint**, the file is read
+  in the browser. CSV rule: one creator per line (LinkedIn/X url or `@handle`); the **first
+  comma-cell** of each row is used (so `url,tag,tag` → `url`), surrounding quotes are stripped, and a
+  leading **header row** (first cell is a known header word like `url`/`profile_url`/`handle`) is
+  skipped. Parsing is the pure helper `lib/pure/csv.ts` (`parseCreatorCsv`).
 - `DELETE /api/creators?id=` → remove a creator (`{ ok:true }`); missing `id` → `400`.
 
 ### 11.3 `POST /api/scrape` / `GET /api/scrape/[id]`
@@ -857,7 +864,7 @@ also shows its group-size indicator.
 │ Apify API token  [•••• saved]      Voyage API key [•••• saved]   Anthropic key [ not set ]  │
 │ Actor ids:  keyword [harvestapi/…]  profile [harvestapi/…]  tweet [apidojo/…]               │
 │ [ Save ]  [ Test connection ]     ● apify ok   ● voyage ok   ○ anthropic (not set)          │
-├─ Creators   48 tracked ──────────────────────────────────────────────────  [ Bulk import ] ┤
+├─ Creators   48 tracked ─────────────────────────────────  [ Upload CSV ]  [ Bulk import ] ┤
 │ [Profile URL / @handle ...............................]  [Tags: ai, founder]  [ Add ]        │
 │ ─────────────────────────────────────────────────────────────────────────────────────────  │
 │  (av) Luna Chen        in/luna-chen     [linkedin-growth][lead-magnets]                Remove │
@@ -973,6 +980,9 @@ Order within the layer (each independent, can be parallelized):
    suite (both→'both', source preservation, empties, null ids, first-wins).
 9b. **`embed-text.ts`** — `buildEmbeddingText(content, imageDescription?)` (§7.2). *Tests:* trims
    content, appends the `[Image content: …]` suffix, treats null content / empty description as no-op.
+9c. **`csv.ts`** — `parseCreatorCsv(text)` (§11.2): one entry per line, first comma-cell, quotes
+   stripped, leading header row dropped. *Tests:* url + `@handle` rows, header skipped, `url,tag,tag`
+   → first cell, blank lines/`\r\n` tolerated.
 
 ### Layer 1 — Config & types
 10. **`config.ts`** — export **non-secret** constants, thresholds, and **default** actor ids.
@@ -1093,8 +1103,10 @@ Order within the layer (each independent, can be parallelized):
 28. **`DashboardFilterBar`** — single search row (Screen A): keywords chips, creator dropdown (count),
     ♥ minLikes / ↗ minShares / ✕ minXFactor, sort, **timeframe select + custom range**, market select,
     platform pill, **Search**. Group-by-image / Discover-trends live in the header (step 30).
-29. **`CreatorManager`** — a single creator list (all part of the scrape set), add (single/**bulk
-    import**), Remove.
+29. **`CreatorManager`** — a single creator list (all part of the scrape set); add one (URL/@handle),
+    **bulk import** (paste box) or **upload CSV** (client-side file read → same `inputs[]` POST, via
+    pure `lib/pure/csv.ts`), Remove. Accepts full LinkedIn/X urls or a Twitter `@handle` (a bare
+    non-@ word is treated as a Twitter handle; LinkedIn needs the url).
 30. **`DashboardClient`** (Search screen) — header ("Search Posts", "Showing N of M", grid/list
     toggle, Group-by-image / Discover-trends buttons); fetch `/api/posts`; render grid vs
     group/cluster views. **`ManualScrape`** is a separate component (on Scrape Settings, step 31):
