@@ -164,6 +164,7 @@ Dependency rule: **arrows point downward only.** A module never imports from a l
       /image-groups.ts           ← union-find image grouping                 (Layer 0)
       /content-clusters.ts       ← average-linkage content clustering        (Layer 0)
       /url.ts                    ← extractActivityId, normalizeProfileUrl, slug/handle (Layer 0)
+      /media.ts                  ← extractMedia (image/video/document + thumbnail) (Layer 0)
       /csv.ts                    ← parseCreatorCsv (bulk-import CSV → inputs[]) (Layer 0)
       /lang.ts                   ← isLikelyNonEnglish                         (Layer 0)
       /embed-text.ts             ← buildEmbeddingText (content + image desc)  (Layer 0)
@@ -246,11 +247,14 @@ CREATE TABLE IF NOT EXISTS posts (
   scrape_source     TEXT,                      -- 'keyword' | 'creator' | 'both'
   market            TEXT,                      -- market bucket this scrape ran under (§6.5), e.g. 'ai'
 
+  -- media (captured at map time, §10.3). JSON of the post's media for rendering (§11.5)
+  media             TEXT,                      -- JSON PostMedia: image[] | video | document | null
+
   -- enrichment (nullable until enrich job runs)
   embedding         BLOB,                      -- Float32[1024] of content (+image desc)
-  image_url         TEXT,                      -- best post image url (may expire)
+  image_url         TEXT,                      -- PRIMARY THUMBNAIL: first image / video poster / doc cover (embed + display)
   image_description TEXT,                      -- optional Claude-vision description
-  image_embedding   BLOB,                      -- Float32[1024] of image
+  image_embedding   BLOB,                      -- Float32[1024] of the thumbnail
   embedded_at       TEXT,                      -- ISO when text embedding written
 
   -- x-factor (nullable until recompute runs)
@@ -633,7 +637,7 @@ not here — keeping the mapper a clean, fully-unit-testable transform.
 - `posted_at` = `raw.postedAt.date` (ISO).
 - `likes/comments/shares` = `raw.engagement.{likes,comments,shares}` (default 0 if `engagement` null).
 - `is_repost` = `!!raw.repostedBy`.
-- `image_url` = first `raw.postImages[].url` (if any).
+- **Media** (`media` + `image_url` thumbnail) via `extractMedia(raw)` (§10.3.1).
 - `platform = 'linkedin'`; `raw_data = JSON.stringify(raw)`; embeddings/x-factor null.
 - **Throw** if no id can be derived.
 
@@ -645,7 +649,35 @@ not here — keeping the mapper a clean, fully-unit-testable transform.
 - `posted_at` = `new Date(raw.createdAt).toISOString()`.
 - `likes = raw.likeCount`, `shares = raw.retweetCount`, `comments = raw.replyCount`.
 - `is_repost = raw.isRetweet ?? false`.
+- `media`/`image_url` = `null` for now — Twitter media mapping is **pending a real tweet payload**
+  (the reference scrape was LinkedIn-only; do not guess the `apidojo/tweet-scraper` media field names,
+  add them from a captured raw item + fixture).
 - `platform = 'twitter'`; `raw_data = JSON.stringify(raw)`.
+
+#### 10.3.1 Media extraction — `extractMedia(raw)` (pure, `lib/pure/media.ts`)
+
+Confirmed from real `harvestapi/linkedin-post-search` output. Returns `{ media, thumbnail }`:
+- **document** (present → wins): `raw.document = { title, transcribedDocumentUrl, totalPageCount,
+  coverPages: [{ imageUrls: string[] }] }` → `{ type:'document', url: transcribedDocumentUrl, title,
+  pages: totalPageCount, cover: coverPages[0].imageUrls.at(-1) }`. **thumbnail** = `cover`.
+- **video** (else): `raw.postVideo = { videoUrl, thumbnailUrl }` → `{ type:'video', url: videoUrl,
+  poster: thumbnailUrl }`. **thumbnail** = `poster`.
+- **image** (else, if any): `raw.postImages = [{ url }]` (an array — carousels have >1) →
+  `{ type:'image', images: postImages.map(i => i.url).filter(Boolean) }`. **thumbnail** = `images[0]`.
+- **none**: `media = null`, `thumbnail = null`.
+
+`image_url` = `thumbnail`, so the enrich job embeds it and image-grouping (§9) spans image posts **and
+document/video thumbnails** (e.g. the "same carousel" case) uniformly. The full `media` JSON drives
+card rendering (§11.5). `raw_data` still preserves the entire payload, so existing rows can be
+**backfilled** by re-running `extractMedia` over `raw_data`.
+
+`PostMedia` (types.ts):
+```ts
+type PostMedia =
+  | { type: 'image';    images: string[] }
+  | { type: 'video';    url: string; poster: string | null }
+  | { type: 'document'; url: string; title: string | null; pages: number | null; cover: string | null }
+```
 
 ### 10.4 Deduplication
 - **Level 1 (in-memory, pure, `lib/pure/dedup.ts`):** merge keyword + creator arrays into a
@@ -842,7 +874,10 @@ Filter row → `/api/posts` params (§11.1):
 
 Post card header: avatar + author + **posted date** on the left; a **🔗 link to the original post**
 (opens in a new tab) and the **platform** badge on the right. Body: content with **…see more** expand;
-optional image. Footer: engagement **👍 likes · 💬 comments · 🔁 shares** on the left, and on the right
+then the post's **media** by `media.type` (§10.3.1): a single **image**, a multi-image **carousel**
+(horizontal strip), a **video** (poster + ▶ overlay → opens the original post; licdn streams aren't
+played inline in v1), or a **document** (cover image + a `📄 N pages` badge → opens the document url).
+Footer: engagement **👍 likes · 💬 comments · 🔁 shares** on the left, and on the right
 the **scrape-source badge** (`both`/`creator`/`keyword`) + **x-factor badge** (≥2× green 🔥 / 0.5–2×
 gray / <0.5× red / hidden when null) + (in image-group view) the group-size indicator. No selection
 checkbox and no add-to-creators button — creators are managed on the Scrape Settings screen.
@@ -972,6 +1007,9 @@ Order within the layer (each independent, can be parallelized):
 9c. **`csv.ts`** — `parseCreatorCsv(text)` (§11.2): one entry per line, first comma-cell, quotes
    stripped, leading header row dropped. *Tests:* url + `@handle` rows, header skipped, `url,tag,tag`
    → first cell, blank lines/`\r\n` tolerated.
+9d. **`media.ts`** — `extractMedia(raw) → { media, thumbnail }` (§10.3.1): document > video > image >
+   none precedence; thumbnail derivation. *Tests (real shapes):* document (cover + pages), video
+   (poster), single image, carousel (>1), and no-media → `{ null, null }`.
 
 ### Layer 1 — Config & types
 10. **`config.ts`** — export **non-secret** constants, thresholds, and **default** actor ids.
@@ -1087,9 +1125,10 @@ Order within the layer (each independent, can be parallelized):
     app opens here and gates Scrape until Apify+Voyage are set. *Tests:* save calls PUT; gate
     shows when `ready.apify`/`ready.voyage` false.
 27. **`PostCard`** — header: author + posted date, **🔗 link to the original post** (new tab) +
-    platform badge; body: content (truncate/…see more) + optional image; footer: engagement 👍/💬/🔁
-    on the left and, on the right, scrape-source badge + **x-factor badge** (≥2× green 🔥 / 0.5–2× gray
-    / <0.5× red / hidden when null) + group-size indicator. No checkbox, no add-author button.
+    platform badge; body: content (truncate/…see more) + **media** by type (§10.3.1): image /
+    carousel / video (poster + ▶ → post) / document (cover + `📄 N pages` → doc); footer: engagement
+    👍/💬/🔁 on the left and, on the right, scrape-source badge + **x-factor badge** (≥2× green 🔥 /
+    0.5–2× gray / <0.5× red / hidden when null) + group-size indicator. No checkbox, no add-author button.
 28. **`DashboardFilterBar`** — single search row (Screen A): keywords chips, creator dropdown
     (collapsed `<details>` with All/None + a checkbox per creator, count in the summary),
     ♥ minLikes / ↗ minShares / ✕ minXFactor, sort, **timeframe select + custom range**, market select,
@@ -1133,8 +1172,9 @@ Order within the layer (each independent, can be parallelized):
 - Mock all external HTTP (Apify, Voyage, Anthropic) with msw. Never hit real APIs in tests.
 - DB tests use `better-sqlite3` `:memory:` databases — real SQL, no mock — so schema + queries
   are exercised against the actual engine.
-- Fixtures (`/tests/fixtures`): sample Apify LinkedIn item, Apify tweet, Voyage response, and a
-  handful of tiny hand-built 1024→(use 4- or 8-dim in tests) embedding vectors for clustering.
+- Fixtures (`/tests/fixtures`): sample Apify LinkedIn items — **one per media kind** (single image,
+  carousel, `postVideo`, `document`), an Apify tweet, a Voyage response, and a handful of tiny
+  hand-built 1024→(use 4- or 8-dim in tests) embedding vectors for clustering.
   *(Tip: make similarity/clustering functions dimension-agnostic so tests can use 4-dim vectors.)*
 
 ---
