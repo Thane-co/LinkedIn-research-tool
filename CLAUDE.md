@@ -23,9 +23,9 @@ Anthropic), all with the **user's own** keys.
 ---
 
 ## Commands
-> The app is **not scaffolded yet** — only this file and the PRD exist. Scaffold as a local
-> **Next.js 14 (App Router) + TypeScript strict + Vitest + better-sqlite3** project per PRD §3/§5,
-> then these are the everyday commands:
+> **On a fresh build** (only this file + the PRD present), first scaffold a local
+> **Next.js 14 (App Router) + TypeScript strict + Vitest + better-sqlite3** project per PRD §3/§5.
+> Once scaffolded, these are the everyday commands:
 - `npm run dev` — run the app locally (`next dev`); DB auto-migrates on first run (PRD §15).
 - `npm run build` / `npm start` — production build / serve locally.
 - `npm test` — full Vitest suite.
@@ -64,8 +64,8 @@ Wire these into `package.json` when scaffolding if the names differ. Work **bott
 ---
 
 ## Invariants — DO NOT silently re-derive
-These are load-bearing decisions (several are already-paid-for bug fixes). **Changing any of them
-requires updating its test AND the PRD in the same change.**
+These are load-bearing decisions. **Changing any of them requires updating its test AND the PRD in
+the same change.**
 
 - **X-factor:** `weighted_score = likes·1 + comments·3 + shares·5`; baseline = mean weighted_score
   of the same author's posts in the prior **30 days**; needs **≥3** priors or x_factor is null.
@@ -93,6 +93,9 @@ requires updating its test AND the PRD in the same change.**
 ## Testing conventions
 - **Mock all external HTTP** (Apify, Voyage, Anthropic) with msw. Never hit real APIs in tests.
 - **DB tests use a real `:memory:` SQLite** (not a mock) so schema + queries are exercised for real.
+- **Component tests run under jsdom** (`// @vitest-environment jsdom`) with `@testing-library/react`;
+  logic/db/route tests stay on `node`. `app/*.tsx` is outside the coverage `include` — behaviour is
+  asserted by component tests, not line counts (PRD §13).
 - Keep similarity/clustering functions **dimension-agnostic** so tests can use tiny 4-dim vectors.
 - Fixtures under `/tests/fixtures`: one Apify LinkedIn item, one tweet, one Voyage response, and a
   few hand-built vectors.
@@ -100,17 +103,27 @@ requires updating its test AND the PRD in the same change.**
 ---
 
 ## What NOT to build (scope guard)
-This is the *research* half only. Do **not** add (they were deliberately stripped):
-post generation / drafts, voice profiles, a stored `trends`/`trend_posts` table, the Claude
-trend-clustering job, cron / scheduling, auth, multi-user, or billing. Grouping is a **live
-on-demand embedding view**, not a persisted artifact. If a task seems to need one of these, stop
-and confirm — it's probably scope creep.
+This is the *research* half only. **Out of scope — do not add:** post generation / drafts, voice
+profiles, a stored `trends`/`trend_posts` table, a Claude trend-clustering job, cron / scheduling,
+auth, multi-user, or billing. Grouping is a **live on-demand embedding view**, not a persisted
+artifact. (In scope, and not to be confused with the above: the saved `keywords`, `saved_searches`,
+and read-only scrape history — PRD §11.6.) If a task seems to need something out of scope, stop and
+confirm — it's probably scope creep.
 
 ---
 
 ## Coding standards
 - All API routes return `NextResponse.json()`.
+- **Every route handler that reads or writes the DB exports `export const dynamic = 'force-dynamic'`**
+  — App-Router prerenders handlers by default, which would freeze DB reads (e.g. settings readiness)
+  at build time (PRD §11/§14).
 - No inline SQL scattered around — keep queries in the `/lib/db/*.repo.ts` modules.
 - Async/await throughout, no raw Promise chains.
 - Store timestamps as **ISO-8601 UTC strings** so lexicographic order == chronological order.
 - Booleans in SQLite are `INTEGER` 0/1; JSON columns are stringified `TEXT`.
+
+## Styling
+- **Follow the design system in PRD §11.7** — it holds across the whole app. One global stylesheet
+  (`app/globals.css`) defines the design **tokens**; components emit **semantic classNames** and the
+  stylesheet targets them. No CSS framework, no CSS-in-JS, no inline hex/spacing — add or reuse a
+  token, never scatter raw values. (The token table + wireframes live in the PRD, not here.)
