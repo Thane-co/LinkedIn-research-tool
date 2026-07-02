@@ -133,18 +133,6 @@ export interface ApifyTweet {
 }
 
 // --- Enriched view shapes (PRD §9) -----------------------------------------
-// Vectors decoded to number[] for pure clustering functions (dimension-agnostic).
-export interface PostWithMedia {
-  id: string
-  content: string | null
-  image_description: string | null
-  image_url: string | null
-  likes: number
-  shares: number
-  textEmbedding: number[] | null
-  imageEmbedding: number[] | null
-}
-
 export interface ImageGroup {
   postIds: string[]
   sharedDescription: string | null

@@ -1,7 +1,7 @@
 // Layer 0 — union-find image grouping (PRD §9.3). Zero I/O. 100% coverage required.
 
 import { IMAGE_SIMILARITY_THRESHOLD, MIN_GROUP_SIZE } from '@/lib/config'
-import { cosine } from '@/lib/pure/similarity'
+import { cosine, pairwiseSimilarityMean } from '@/lib/pure/similarity'
 import type { ImageGroup } from '@/lib/types'
 
 interface ImagePost {
@@ -66,19 +66,14 @@ export function findSimilarImageGroups(
       top.image_description ?? (top.content ? snippet(top.content) : null)
 
     // Cohesion = average pairwise image cosine among the members (>=1 pair; group size >= 2).
-    let simSum = 0
-    let simCount = 0
-    for (let a = 0; a < members.length; a++) {
-      for (let b = a + 1; b < members.length; b++) {
-        simSum += cosine(members[a]!.imageEmbedding, members[b]!.imageEmbedding)
-        simCount++
-      }
-    }
+    const similarity = pairwiseSimilarityMean(members.length, (a, b) =>
+      cosine(members[a]!.imageEmbedding, members[b]!.imageEmbedding),
+    )
 
     groups.push({
       postIds: members.map((p) => p.id),
       sharedDescription,
-      similarity: simSum / simCount,
+      similarity,
       totalLikes: members.reduce((s, p) => s + p.likes, 0),
       totalShares: members.reduce((s, p) => s + p.shares, 0),
     })

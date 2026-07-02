@@ -1037,7 +1037,7 @@ Order within the layer (each independent, can be parallelized):
 10. **`config.ts`** — export **non-secret** constants, thresholds, and **default** actor ids.
     No secret loading here (keys live in the settings table, §6.4).
 11. **`types.ts`** — `PostRow`, `CreatorRow`, `ScrapeJobRow`, `SettingsMap`, `ApifyPost`,
-    `ApifyTweet`, `PostWithMedia`, `ImageGroup`, `ContentCluster`, `ScrapeStats`, `Timeframe`.
+    `ApifyTweet`, `PostMedia`, `ImageGroup`, `ContentCluster`, `ScrapeStats`, `Timeframe`.
     *Test:* types compile under strict mode (type-level tests optional).
 
 ### Layer 2 — I/O adapters (mock all external calls in tests)

@@ -33,3 +33,19 @@ export function combined(
   }
   return textSim
 }
+
+/**
+ * Mean of `valueAt(a, b)` over every unordered pair of `n` items — the cohesion score a group
+ * reports (§9.3/§9.4). Returns 0 when there are no pairs (`n < 2`).
+ */
+export function pairwiseSimilarityMean(n: number, valueAt: (a: number, b: number) => number): number {
+  let sum = 0
+  let count = 0
+  for (let a = 0; a < n; a++) {
+    for (let b = a + 1; b < n; b++) {
+      sum += valueAt(a, b)
+      count++
+    }
+  }
+  return count === 0 ? 0 : sum / count
+}

@@ -1,7 +1,7 @@
 // Layer 0 — greedy average-linkage content clustering (PRD §9.4). Zero I/O. 100% coverage.
 
 import { CONTENT_FLOOR, CONTENT_SIMILARITY_THRESHOLD, MIN_GROUP_SIZE } from '@/lib/config'
-import { combined } from '@/lib/pure/similarity'
+import { combined, pairwiseSimilarityMean } from '@/lib/pure/similarity'
 import type { ContentCluster } from '@/lib/types'
 
 interface ClusterPost {
@@ -90,19 +90,12 @@ export function findContentClusters(
     }
 
     // Cohesion = average pairwise combined similarity among the members (>=1 pair; size >= 2).
-    let simSum = 0
-    let simCount = 0
-    for (let a = 0; a < members.length; a++) {
-      for (let b = a + 1; b < members.length; b++) {
-        simSum += sim[members[a]!]![members[b]!]!
-        simCount++
-      }
-    }
+    const similarity = pairwiseSimilarityMean(members.length, (a, b) => sim[members[a]!]![members[b]!]!)
 
     result.push({
       postIds: members.map((m) => posts[m]!.id),
       label: firstSentence(posts[best]!.content),
-      similarity: simSum / simCount,
+      similarity,
       totalLikes: members.reduce((s, m) => s + posts[m]!.likes, 0),
       totalShares: members.reduce((s, m) => s + posts[m]!.shares, 0),
     })
