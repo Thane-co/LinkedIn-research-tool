@@ -3,7 +3,7 @@ import { enrichPosts } from '@/jobs/enrich'
 import { countUnembedded, getUnembedded, setEmbedding } from '@/lib/db/posts.repo'
 import { embedImage, embedTexts } from '@/lib/voyage'
 import { describeImage } from '@/lib/anthropic'
-import { blobToVector } from '@/lib/pure/vector-blob'
+import { blobToVector, vectorToBlob } from '@/lib/pure/vector-blob'
 import { makePostRow } from '@/tests/fixtures/posts'
 
 // Enrich orchestrates repo + adapters; unit-test it with those mocked (PRD §12 step 20).
@@ -114,6 +114,45 @@ describe('enrichPosts', () => {
     const [id, textBlob] = mocked.setEmbedding.mock.calls[0]!
     expect(id).toBe('img')
     expect(blobToVector(textBlob)).toEqual([1, 0, 0, 0])
+    expect(res.embedded).toBe(1)
+  })
+
+  it('backfills only the image embedding for an already-text-embedded post (never re-embeds text)', async () => {
+    // A video/document post text-embedded before its poster thumbnail existed: it now has an
+    // image_url but no image_embedding. Enrich must fill the image side WITHOUT re-embedding text.
+    mocked.getUnembedded.mockReturnValue([
+      makePostRow({
+        id: 'v',
+        content: 'a video post',
+        image_url: 'https://poster.jpg',
+        embedding: vectorToBlob([1, 0, 0, 0]),
+        image_embedding: null,
+      }),
+    ])
+    mocked.embedImage.mockResolvedValue([0, 0, 1, 0])
+
+    const res = await enrichPosts(50)
+
+    expect(mocked.embedTexts).not.toHaveBeenCalled() // invariant: no text re-embed
+    expect(mocked.embedImage).toHaveBeenCalledWith('https://poster.jpg')
+    const [id, textBlob, , imgBlob] = mocked.setEmbedding.mock.calls[0]!
+    expect(id).toBe('v')
+    expect(blobToVector(textBlob)).toEqual([1, 0, 0, 0]) // existing text vector preserved
+    expect(blobToVector(imgBlob as Buffer)).toEqual([0, 0, 1, 0])
+    expect(res.embedded).toBe(1)
+  })
+
+  it('re-embeds text as well when reEmbed is set', async () => {
+    mocked.getUnembedded.mockReturnValue([
+      makePostRow({ id: 'a', content: 'again', image_url: null, embedding: vectorToBlob([9, 9, 9, 9]) }),
+    ])
+    mocked.embedTexts.mockResolvedValue([[2, 0, 0, 0]])
+
+    const res = await enrichPosts(50, { reEmbed: true })
+
+    expect(mocked.embedTexts).toHaveBeenCalledWith(['again'])
+    const [, textBlob] = mocked.setEmbedding.mock.calls[0]!
+    expect(blobToVector(textBlob)).toEqual([2, 0, 0, 0])
     expect(res.embedded).toBe(1)
   })
 })

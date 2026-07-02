@@ -279,11 +279,25 @@ describe('x-factor + embedding writes', () => {
     expect(getUnembedded(10, { reEmbed: true }).map((p) => p.id).sort()).toEqual(['a', 'b'])
   })
 
-  it('countUnembedded counts only rows with a null embedding', () => {
+  it('getUnembedded also returns posts that have a thumbnail but no image embedding (backfill)', () => {
+    const tvec = vectorToBlob([1, 0, 0, 0])
+    const ivec = vectorToBlob([0, 1, 0, 0])
     seed([
-      { id: 'a', embedding: null },
-      { id: 'b', embedding: vectorToBlob([1, 0, 0, 0]) },
-      { id: 'c', embedding: null },
+      { id: 'textonly', embedding: tvec, image_url: null, image_embedding: null }, // done — no media
+      { id: 'both', embedding: tvec, image_url: 'u', image_embedding: ivec }, // done — fully embedded
+      { id: 'needimg', embedding: tvec, image_url: 'u', image_embedding: null }, // backfill the image
+      { id: 'needtext', embedding: null, image_url: 'u', image_embedding: null }, // brand new
+    ])
+    expect(getUnembedded(10).map((p) => p.id).sort()).toEqual(['needimg', 'needtext'])
+  })
+
+  it('countUnembedded counts rows missing a text OR an image embedding (with a thumbnail)', () => {
+    const tvec = vectorToBlob([1, 0, 0, 0])
+    const ivec = vectorToBlob([0, 1, 0, 0])
+    seed([
+      { id: 'both', embedding: tvec, image_url: 'u', image_embedding: ivec }, // not counted
+      { id: 'needimg', embedding: tvec, image_url: 'u', image_embedding: null }, // counted
+      { id: 'needtext', embedding: null, image_url: null, image_embedding: null }, // counted
     ])
     expect(countUnembedded()).toBe(2)
   })

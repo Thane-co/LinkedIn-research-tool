@@ -27,6 +27,14 @@ describe('findSimilarImageGroups', () => {
     expect(groups[0]!.postIds.sort()).toEqual(['a', 'b'])
   })
 
+  it('reports the average pairwise image similarity of the group', () => {
+    const groups = findSimilarImageGroups([
+      post({ id: 'a', imageEmbedding: [1, 0, 0, 0] }),
+      post({ id: 'b', imageEmbedding: [1, 0, 0, 0] }), // identical → cosine 1
+    ])
+    expect(groups[0]!.similarity).toBeCloseTo(1, 5)
+  })
+
   it('does not group images below the threshold', () => {
     const groups = findSimilarImageGroups([
       post({ id: 'x', imageEmbedding: [1, 0, 0, 0] }),

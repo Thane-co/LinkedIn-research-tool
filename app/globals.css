@@ -226,6 +226,33 @@ button[aria-pressed='true'] {
 .dashboard__view {
   display: inline-flex;
 }
+.dashboard__threshold {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.dashboard__threshold input[type='range'] {
+  width: 110px;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+.dashboard__empty {
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 24px;
+  text-align: center;
+}
+.dashboard__sim {
+  font-weight: 700;
+  color: var(--primary);
+}
 .dashboard__view button:first-child {
   border-radius: var(--radius-sm) 0 0 var(--radius-sm);
 }
@@ -337,19 +364,36 @@ button[aria-pressed='true'] {
 }
 .dashboard__groups,
 .dashboard__clusters {
-  list-style: none;
-  padding: 0;
-  margin: 0;
   display: grid;
   gap: 10px;
 }
-.dashboard__groups li,
-.dashboard__clusters li {
+.group-panel {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px 16px;
   box-shadow: var(--shadow);
+}
+.group-panel > summary {
+  cursor: pointer;
+  padding: 14px 16px;
+  list-style: none;
+  color: var(--text-muted);
+}
+.group-panel > summary::-webkit-details-marker {
+  display: none;
+}
+.group-panel > summary::before {
+  content: '▸ ';
+  color: var(--text-muted);
+}
+.group-panel[open] > summary::before {
+  content: '▾ ';
+}
+.group-panel > summary strong {
+  color: var(--text);
+}
+.group-panel__posts {
+  padding: 0 16px 16px;
 }
 
 /* ── Post card ─────────────────────────────────────────────────────────── */
@@ -466,17 +510,12 @@ button[aria-pressed='true'] {
 .post-card__stats .stat b {
   color: var(--text);
 }
-/* scrape-source + x-factor + group-size badges, pushed to the right by the engagement numbers */
+/* scrape-source + x-factor badges, pushed to the right by the engagement numbers */
 .post-card__badges {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-}
-.post-card__group {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--primary);
 }
 
 /* ── Settings screen (cards) ───────────────────────────────────────────── */

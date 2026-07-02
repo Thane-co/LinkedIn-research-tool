@@ -7,11 +7,12 @@ import {
   getAvailableAuthors,
   getCandidatesForClustering,
   searchPosts,
+  type ClusteringCandidate,
   type PostFilters,
 } from '@/lib/db/posts.repo'
 import { findContentClusters } from '@/lib/pure/content-clusters'
 import { findSimilarImageGroups } from '@/lib/pure/image-groups'
-import type { PostMedia, PostRow, PostWithMedia, SortMode, Timeframe } from '@/lib/types'
+import type { PostMedia, PostRow, SortMode, Timeframe } from '@/lib/types'
 
 // Reads the live DB — never statically prerender/cache.
 export const dynamic = 'force-dynamic'
@@ -59,10 +60,11 @@ function serializePost(row: PostRow): Omit<PostRow, 'embedding' | 'image_embeddi
   return { ...rest, media: parsed }
 }
 
-/** Candidate post minus its heavy vectors, optionally annotated with its image-group size. */
-function lightCandidate(p: PostWithMedia, imageGroupSize?: number): Record<string, unknown> {
-  const { textEmbedding: _t, imageEmbedding: _i, ...rest } = p
-  return imageGroupSize === undefined ? rest : { ...rest, imageGroupSize }
+/** A clustering candidate serialized as a full renderable post (drop the decoded vectors first) — so
+ *  the UI can render a group's members by looking their ids up in `posts`. */
+function serializeCandidate(c: ClusteringCandidate): ReturnType<typeof serializePost> {
+  const { textEmbedding: _t, imageEmbedding: _i, ...row } = c
+  return serializePost(row)
 }
 
 export async function GET(req: Request): Promise<NextResponse> {
@@ -90,10 +92,8 @@ export async function GET(req: Request): Promise<NextResponse> {
         })),
         imageThreshold,
       )
-      const sizeById = new Map<string, number>()
-      for (const g of imageGroups) for (const id of g.postIds) sizeById.set(id, g.postIds.length)
       return NextResponse.json({
-        posts: candidates.map((c) => lightCandidate(c, sizeById.get(c.id) ?? 1)),
+        posts: candidates.map((c) => serializeCandidate(c)),
         imageGroups,
         hasMore: false,
         availableAuthors,
@@ -114,7 +114,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       textThreshold,
     )
     return NextResponse.json({
-      posts: candidates.map((c) => lightCandidate(c)),
+      posts: candidates.map((c) => serializeCandidate(c)),
       contentClusters,
       hasMore: false,
       availableAuthors,

@@ -25,6 +25,7 @@ describe('findContentClusters', () => {
     ])
     expect(clusters).toHaveLength(1)
     expect(clusters[0]!.postIds.sort()).toEqual(['a', 'b'])
+    expect(clusters[0]!.similarity).toBeCloseTo(0.8, 5) // avg pairwise combined similarity
   })
 
   it('does not cluster a pair below 0.65', () => {

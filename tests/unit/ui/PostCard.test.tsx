@@ -101,10 +101,4 @@ describe('PostCard', () => {
     expect(screen.getByRole('img')).toHaveAttribute('src', 'https://img/fallback.png')
   })
 
-  it('shows a group-size indicator only when part of an image group', () => {
-    const { rerender } = render(<PostCard post={makePost({ imageGroupSize: 4 })} />)
-    expect(screen.getByText(/4/).closest('[data-testid="group-size"]')).toBeInTheDocument()
-    rerender(<PostCard post={makePost({ imageGroupSize: 1 })} />)
-    expect(screen.queryByTestId('group-size')).not.toBeInTheDocument()
-  })
 })

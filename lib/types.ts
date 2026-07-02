@@ -148,6 +148,7 @@ export interface PostWithMedia {
 export interface ImageGroup {
   postIds: string[]
   sharedDescription: string | null
+  similarity: number // avg pairwise image cosine of the members (0–1)
   totalLikes: number
   totalShares: number
 }
@@ -155,6 +156,7 @@ export interface ImageGroup {
 export interface ContentCluster {
   postIds: string[]
   label: string | null
+  similarity: number // avg pairwise combined similarity of the members (0–1)
   totalLikes: number
   totalShares: number
 }

@@ -23,13 +23,18 @@ export async function enrichPosts(
     return { embedded: 0, remaining: countUnembedded() }
   }
 
-  const texts = posts.map((p) => buildEmbeddingText(p.content, p.image_description))
-  const vectors = await embedTexts(texts)
+  // Only call Voyage for posts actually missing a text embedding (honor "never re-embed" unless
+  // reEmbed). Posts selected only to backfill a missing image embedding reuse their stored text
+  // vector, so we never re-embed text just to fill in a poster thumbnail.
+  const needText = posts.filter((p) => reEmbed || p.embedding === null)
+  const vectors = needText.length > 0 ? await embedTexts(needText.map((p) => buildEmbeddingText(p.content, p.image_description))) : []
+  const textBlobById = new Map<string, Buffer>()
+  needText.forEach((p, i) => textBlobById.set(p.id, vectorToBlob(vectors[i]!)))
   const now = new Date().toISOString()
 
   for (let i = 0; i < posts.length; i++) {
     const post = posts[i]!
-    const textBlob = vectorToBlob(vectors[i]!)
+    const textBlob = textBlobById.get(post.id) ?? post.embedding!
 
     // Text-only posts: write just the text vector (leave image columns untouched).
     if (!post.image_url) {

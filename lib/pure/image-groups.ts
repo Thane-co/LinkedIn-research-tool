@@ -64,9 +64,21 @@ export function findSimilarImageGroups(
     const top = members.reduce((best, p) => (engagement(p) > engagement(best) ? p : best))
     const sharedDescription =
       top.image_description ?? (top.content ? snippet(top.content) : null)
+
+    // Cohesion = average pairwise image cosine among the members (>=1 pair; group size >= 2).
+    let simSum = 0
+    let simCount = 0
+    for (let a = 0; a < members.length; a++) {
+      for (let b = a + 1; b < members.length; b++) {
+        simSum += cosine(members[a]!.imageEmbedding, members[b]!.imageEmbedding)
+        simCount++
+      }
+    }
+
     groups.push({
       postIds: members.map((p) => p.id),
       sharedDescription,
+      similarity: simSum / simCount,
       totalLikes: members.reduce((s, p) => s + p.likes, 0),
       totalShares: members.reduce((s, p) => s + p.shares, 0),
     })

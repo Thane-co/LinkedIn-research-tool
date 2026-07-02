@@ -431,11 +431,17 @@ function buildEmbeddingText(content: string | null, imageDescription?: string | 
   (`/lib/pure/vector-blob.ts`) and write to `posts.embedding` (+ `embedded_at = now`).
 - **Never re-embed** a post that already has `embedding` unless an explicit `reEmbed`
   flag is passed (used after image descriptions are added). The unembedded loader
-  (`getUnembedded(limit, { reEmbed })`) filters on `embedding IS NULL` by default and drops that
-  filter under `reEmbed`.
+  (`getUnembedded(limit, { reEmbed })`) selects a post when it is **missing its text embedding OR it
+  has a thumbnail (`image_url IS NOT NULL`) but no `image_embedding`** — the second clause backfills
+  posts (e.g. **videos and documents**) that were text-embedded before their poster/cover thumbnail
+  existed, so group-by-image (§9) sees them. Under `reEmbed` the filter is dropped entirely.
+  `countUnembedded` uses the same predicate so `remaining` reaches 0.
 
 **Enrich contract** (`enrichPosts(limit, { reEmbed? }) → { embedded, remaining }`, Layer 3):
 - Load ≤`limit` candidates, build each embedding text (§7.2), batch-embed, write BLOBs.
+- Only call Voyage **text** embedding for candidates actually missing a text embedding (or all, under
+  `reEmbed`). A candidate selected only to **backfill** a missing image embedding **reuses its stored
+  text vector** and just embeds the thumbnail — so filling in a poster never re-embeds text.
 - `embedded` = posts written this call; `remaining` = posts still lacking an embedding afterward
   (`countUnembedded()`), so a caller can loop until the backlog drains.
 - A batch-level Voyage failure **throws** (the caller logs it non-fatally, §10.5). Per-image work is
@@ -544,7 +550,8 @@ MIN_GROUP_SIZE = 2                   // both image groups and content clusters
 - For every pair (i, j), if `cosine(img_i, img_j) >= 0.80`, `union(i, j)`.
 - Emit connected components of size `>= 2`.
 - Per group: `sharedDescription` = `image_description` of the highest-engagement member
-  (fallback to its content snippet); `totalLikes`, `totalShares` summed; `postIds[]`.
+  (fallback to its content snippet); `similarity` = **average pairwise image cosine** of the members
+  (0–1, shown as "N% similar"); `totalLikes`, `totalShares` summed; `postIds[]`.
 - Sort groups by total engagement (likes + shares) DESC.
 
 ### 9.4 Content clustering — greedy average-linkage (`findContentClusters`)
@@ -559,7 +566,8 @@ MIN_GROUP_SIZE = 2                   // both image groups and content clusters
 - Keep clusters of size `>= 2`.
 - **Centrality** per member = avg similarity to the other members of its cluster.
   `label` = first sentence (≤100 chars) of the **highest-centrality** post.
-- Per cluster: `label`, `totalLikes`, `totalShares`, `postIds[]`; sort by total engagement DESC.
+- Per cluster: `label`; `similarity` = **average pairwise combined similarity** of the members (0–1);
+  `totalLikes`, `totalShares`, `postIds[]`; sort by total engagement DESC.
 
 > Both live in `lib/pure/image-groups.ts` / `lib/pure/content-clusters.ts`. No Claude, no pgvector —
 > pure functions, fully unit-testable with small fixture vectors.
@@ -775,9 +783,12 @@ Behavior:
 - **Grouping mode** (`groupByImage` or `discoverTrends` true): load up to **400** filtered posts
   that carry the required embeddings, run §9 clustering in JS, and return `{ posts, hasMore:false,
   availableAuthors }` plus **`imageGroups`** (for `groupByImage`) or **`contentClusters`** (for
-  `discoverTrends`). Candidate `posts` drop their vectors too; under `groupByImage` each is annotated
-  with `imageGroupSize` (its group's size, `1` if ungrouped). `groupByImage` takes precedence if both
-  flags are set. `imageThreshold`/`textThreshold` override the §9.2 defaults.
+  `discoverTrends`). The candidate `posts` are **full serialized posts** (same shape as paginated
+  mode — BLOBs/`raw_data` stripped, `media` parsed), so the UI renders each group's member cards by
+  looking their `postIds` up in `posts` — group membership is shown by the panel, not per-card.
+  `groupByImage` takes precedence if both flags are set. `imageThreshold`/`textThreshold` override the §9.2 defaults.
+  Each group/cluster carries a `similarity` score (§9.3/§9.4); an empty `imageGroups`/`contentClusters`
+  array means nothing met the threshold (the UI shows an empty-state, not a blank page).
 - `availableAuthors` (always present) is the distinct `author_id`+`author_name`+`avatar` set for the
   creator-filter dropdown. It honors the active filters **except** the `authors` include-list (so
   selecting authors never shrinks the dropdown). The `posts` table has **no avatar column**, so
@@ -856,7 +867,11 @@ Two screens: **Search** (the default dashboard) and **Scrape Settings** (creator
 
 Header controls (right): **grid/list** view toggle; **Group by image** and **Discover trends** are
 toggle buttons that switch `/api/posts` into grouping mode (§11.1) — active state is visually pressed.
-Sub-header: **"Showing {posts.length} of {total} matching posts"** (grouping mode shows group counts).
+When a grouping mode is active, a **similarity slider** appears next to it (0.3–0.95) bound to
+`imageThreshold` / `textThreshold`, so the user can loosen/tighten grouping live. Each group/cluster
+row shows **"N% similar"** (§9.3/§9.4); if nothing groups, an **empty-state** explains why (lower the
+slider / try the other mode) instead of a blank page. Sub-header: **"Showing {posts.length} of
+{total} matching posts"**.
 
 Filter row → `/api/posts` params (§11.1):
 | Control | Param |
@@ -879,8 +894,9 @@ then the post's **media** by `media.type` (§10.3.1): a single **image**, a mult
 played inline in v1), or a **document** (cover image + a `📄 N pages` badge → opens the document url).
 Footer: engagement **👍 likes · 💬 comments · 🔁 shares** on the left, and on the right
 the **scrape-source badge** (`both`/`creator`/`keyword`) + **x-factor badge** (≥2× green 🔥 / 0.5–2×
-gray / <0.5× red / hidden when null) + (in image-group view) the group-size indicator. No selection
-checkbox and no add-to-creators button — creators are managed on the Scrape Settings screen.
+gray / <0.5× red / hidden when null). No selection checkbox and no add-to-creators button — creators
+are managed on the Scrape Settings screen. (Group membership is shown by the group panel, not on the
+card — see §11.5.)
 
 ### Screen B — Scrape Settings
 
@@ -1044,10 +1060,13 @@ Order within the layer (each independent, can be parallelized):
     `countUnembedded`, `setEmbedding`. Notes: `getCandidatesForClustering` takes a
     `requireImageEmbedding` flag (image grouping needs `image_embedding`; content clustering needs
     only text `embedding`) and orders by `likes DESC` so the 400-cap keeps the most-engaged
-    candidates deterministically; it decodes BLOBs → `number[]` for the pure clustering fns.
+    candidates deterministically. It returns **`ClusteringCandidate` = the full `PostRow` + decoded
+    `textEmbedding`/`imageEmbedding` `number[]`** — the pure clustering fns read only the vectors +
+    engagement, while the route serializes the full rows so the UI can render each group's members.
     `insertPosts` uses `INSERT OR IGNORE` and returns the count actually inserted. `getUnembedded`
-    filters on `embedding IS NULL` unless `reEmbed` is set; `countUnembedded` backs the enrich
-    `remaining` count. `getAvailableAuthors` (§11.1) applies the filters minus the `authors` list and
+    selects rows missing a text embedding **or** having a thumbnail but no `image_embedding` (§7.3)
+    unless `reEmbed` is set; `countUnembedded` shares that predicate and backs the enrich `remaining`
+    count. `getAvailableAuthors` (§11.1) applies the filters minus the `authors` list and
     joins `creators.avatar_url` on `author_id` for the `avatar` field (posts carry no avatar column).
     *Tests:* against `:memory:` db with seeded rows — filters, pagination/`hasMore`, ordering,
     x-factor update, dedup queries, clustering-candidate decode + image-required filter,
@@ -1092,10 +1111,12 @@ Order within the layer (each independent, can be parallelized):
 
 ### Layer 3 — Orchestration jobs
 20. **`jobs/enrich.ts`** — `enrichPosts(limit, {reEmbed}) → { embedded, remaining }` (§7.3): load
-    unembedded posts, build text, batch-embed, write BLOBs; per-image embed/describe is non-fatal and
+    unembedded posts, text-embed only those missing a text vector (reuse the stored vector for
+    image-backfill posts), embed thumbnails, write BLOBs; per-image embed/describe is non-fatal and
     preserves an existing description. *Tests:* mocks repo + voyage; never re-embeds unless `reEmbed`
-    (flag threads to the loader); text-only vs image post write paths; per-image failure still writes
-    the text vector; `remaining` count correct.
+    (flag threads to the loader); text-only vs image post write paths; **image-only backfill embeds
+    the thumbnail without re-embedding text**; per-image failure still writes the text vector;
+    `remaining` count correct.
 21. **`jobs/scrape.ts`** — `runScrape` (§10.5, accepts an optional pre-created `jobId`) +
     `recomputeXFactors` (§8.4). *Tests:* keyword + creator run in parallel; stats incl. duplicate/both
     counts; one scraper empty still completes; **every scraper failing → job 'failed'** (and enrich is
@@ -1112,7 +1133,7 @@ Order within the layer (each independent, can be parallelized):
     valid input; list + tag/platform filter; delete (and `400` without id).
 24. **`/api/posts`** — paginated + grouping modes. *Tests:* each filter; sort modes; `hasMore`
     exactness; BLOBs/`raw_data` stripped; `availableAuthors` always present; `groupByImage` returns
-    `imageGroups` + `imageGroupSize` annotation; `discoverTrends` returns `contentClusters`;
+    `imageGroups` + full member posts; `discoverTrends` returns `contentClusters`;
     400-cap respected.
 25. **`/api/scrape` + `/api/scrape/[id]`** — start creates the job and returns `202 { jobId }`
     immediately (fires `runScrape` with that id, unawaited); status GET returns the row or `404`.
@@ -1128,7 +1149,7 @@ Order within the layer (each independent, can be parallelized):
     platform badge; body: content (truncate/…see more) + **media** by type (§10.3.1): image /
     carousel / video (poster + ▶ → post) / document (cover + `📄 N pages` → doc); footer: engagement
     👍/💬/🔁 on the left and, on the right, scrape-source badge + **x-factor badge** (≥2× green 🔥 /
-    0.5–2× gray / <0.5× red / hidden when null) + group-size indicator. No checkbox, no add-author button.
+    0.5–2× gray / <0.5× red / hidden when null). No checkbox, no add-author button.
 28. **`DashboardFilterBar`** — single search row (Screen A): keywords chips, creator dropdown
     (collapsed `<details>` with All/None + a checkbox per creator, count in the summary),
     ♥ minLikes / ↗ minShares / ✕ minXFactor, sort, **timeframe select + custom range**, market select,
@@ -1138,8 +1159,10 @@ Order within the layer (each independent, can be parallelized):
     pure `lib/pure/csv.ts`), Remove. Accepts full LinkedIn/X urls or a Twitter `@handle` (a bare
     non-@ word is treated as a Twitter handle; LinkedIn needs the url).
 30. **`DashboardClient`** (Search screen) — header ("Search Posts", "Showing N of M", grid/list
-    toggle, Group-by-image / Discover-trends buttons); fetch `/api/posts`; render grid vs
-    group/cluster views. **`ManualScrape`** is a separate component (on Scrape Settings, step 31):
+    toggle, Group-by-image / Discover-trends buttons + a **similarity slider** per active grouping
+    mode); fetch `/api/posts`; render grid, or group/cluster panels showing **"N% similar"** that
+    **expand (`<details>`) to reveal the member post cards** (looked up from `posts` by `postId`), with
+    an **empty-state** when nothing groups. **`ManualScrape`** is a separate component (on Scrape Settings, step 31):
     Source/Platform/Timeframe selects + **Run scrape now** → POST `/api/scrape` → poll status pill.
 31. **`page.tsx` + `ScrapeSettings`** — `page.tsx` checks `/api/settings` readiness on mount and
     routes between **Search** (`DashboardClient`) and **Scrape Settings** (`ScrapeSettings`), with

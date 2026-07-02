@@ -57,7 +57,7 @@ describe('GET /api/posts — grouping mode', () => {
   const timg = vectorToBlob([1, 0, 0, 0])
   const timg2 = vectorToBlob([0.99, 0.01, 0, 0])
 
-  it('groupByImage returns image groups + annotates posts with imageGroupSize', async () => {
+  it('groupByImage returns image groups and full member posts (no per-card annotation)', async () => {
     seed([
       { id: 'g1', likes: 10, embedding: timg, image_embedding: timg, image_description: 'chart' },
       { id: 'g2', likes: 8, embedding: timg, image_embedding: timg2, image_description: 'chart' },
@@ -67,8 +67,11 @@ describe('GET /api/posts — grouping mode', () => {
     expect(body.hasMore).toBe(false)
     expect(body.imageGroups).toHaveLength(1)
     expect(body.imageGroups[0].postIds.sort()).toEqual(['g1', 'g2'])
+    // members are returned as full renderable posts, looked up by id — no imageGroupSize badge
     const g1 = body.posts.find((p: { id: string }) => p.id === 'g1')
-    expect(g1.imageGroupSize).toBe(2)
+    expect(g1).toBeDefined()
+    expect(g1.url).toBeDefined()
+    expect(g1.imageGroupSize).toBeUndefined()
   })
 
   it('discoverTrends returns content clusters', async () => {

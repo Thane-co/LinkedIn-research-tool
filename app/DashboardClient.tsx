@@ -10,12 +10,14 @@ import { PostCard, type PostCardPost } from '@/app/PostCard'
 interface ImageGroup {
   postIds: string[]
   sharedDescription: string | null
+  similarity: number
   totalLikes: number
   totalShares: number
 }
 interface ContentCluster {
   postIds: string[]
   label: string | null
+  similarity: number
   totalLikes: number
   totalShares: number
 }
@@ -70,6 +72,36 @@ export function toQuery(f: Filters): string {
   return p.toString()
 }
 
+/** A collapsible group/cluster: summary line → expands to the member post cards. */
+function GroupPanel({
+  title,
+  postIds,
+  similarity,
+  engagement,
+  postById,
+}: {
+  title: string
+  postIds: string[]
+  similarity: number
+  engagement: number
+  postById: Map<string, PostCardPost>
+}) {
+  const members = postIds.map((id) => postById.get(id)).filter((p): p is PostCardPost => Boolean(p))
+  return (
+    <details className="group-panel">
+      <summary>
+        <strong>{title}</strong> · {postIds.length} posts ·{' '}
+        <span className="dashboard__sim">{Math.round(similarity * 100)}% similar</span> · {engagement} engagement
+      </summary>
+      <div className="dashboard__results dashboard__results--grid group-panel__posts">
+        {members.map((p) => (
+          <PostCard key={p.id} post={p} />
+        ))}
+      </div>
+    </details>
+  )
+}
+
 export function DashboardClient() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
   const [view, setView] = useState<'grid' | 'list'>('grid')
@@ -86,6 +118,7 @@ export function DashboardClient() {
 
   const total = data.total ?? data.posts.length
   const grouping = Boolean(data.imageGroups || data.contentClusters)
+  const postById = new Map(data.posts.map((p) => [p.id, p]))
 
   return (
     <div className="dashboard">
@@ -112,6 +145,19 @@ export function DashboardClient() {
           >
             Group by image
           </button>
+          {filters.groupByImage && (
+            <label className="dashboard__threshold" aria-label="image similarity threshold">
+              Similarity {Math.round(filters.imageThreshold * 100)}%
+              <input
+                type="range"
+                min={0.3}
+                max={0.95}
+                step={0.01}
+                value={filters.imageThreshold}
+                onChange={(e) => setFilters((f) => ({ ...f, imageThreshold: Number(e.target.value) }))}
+              />
+            </label>
+          )}
           <button
             type="button"
             aria-pressed={filters.discoverTrends}
@@ -119,29 +165,63 @@ export function DashboardClient() {
           >
             Discover trends
           </button>
+          {filters.discoverTrends && (
+            <label className="dashboard__threshold" aria-label="content similarity threshold">
+              Similarity {Math.round(filters.textThreshold * 100)}%
+              <input
+                type="range"
+                min={0.3}
+                max={0.95}
+                step={0.01}
+                value={filters.textThreshold}
+                onChange={(e) => setFilters((f) => ({ ...f, textThreshold: Number(e.target.value) }))}
+              />
+            </label>
+          )}
         </div>
       </header>
 
       <DashboardFilterBar filters={filters} availableAuthors={data.availableAuthors} onChange={setFilters} onSearch={load} />
 
       {data.imageGroups ? (
-        <ul className="dashboard__groups">
-          {data.imageGroups.map((g, i) => (
-            <li key={i}>
-              <strong>{g.sharedDescription ?? 'Similar images'}</strong> · {g.postIds.length} posts ·{' '}
-              {g.totalLikes + g.totalShares} engagement
-            </li>
-          ))}
-        </ul>
+        data.imageGroups.length === 0 ? (
+          <p className="dashboard__empty">
+            No image groups at {Math.round(filters.imageThreshold * 100)}% similarity — lower the slider,
+            or try Discover trends for topical grouping.
+          </p>
+        ) : (
+          <div className="dashboard__groups">
+            {data.imageGroups.map((g, i) => (
+              <GroupPanel
+                key={i}
+                title={g.sharedDescription ?? 'Similar images'}
+                postIds={g.postIds}
+                similarity={g.similarity}
+                engagement={g.totalLikes + g.totalShares}
+                postById={postById}
+              />
+            ))}
+          </div>
+        )
       ) : data.contentClusters ? (
-        <ul className="dashboard__clusters">
-          {data.contentClusters.map((c, i) => (
-            <li key={i}>
-              <strong>{c.label ?? 'Cluster'}</strong> · {c.postIds.length} posts ·{' '}
-              {c.totalLikes + c.totalShares} engagement
-            </li>
-          ))}
-        </ul>
+        data.contentClusters.length === 0 ? (
+          <p className="dashboard__empty">
+            No trends at {Math.round(filters.textThreshold * 100)}% similarity — lower the slider.
+          </p>
+        ) : (
+          <div className="dashboard__clusters">
+            {data.contentClusters.map((c, i) => (
+              <GroupPanel
+                key={i}
+                title={c.label ?? 'Cluster'}
+                postIds={c.postIds}
+                similarity={c.similarity}
+                engagement={c.totalLikes + c.totalShares}
+                postById={postById}
+              />
+            ))}
+          </div>
+        )
       ) : (
         <div className={`dashboard__results dashboard__results--${grouping ? 'grid' : view}`}>
           {data.posts.map((p) => (

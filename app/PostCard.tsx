@@ -22,7 +22,6 @@ export interface PostCardPost {
   scrape_source: 'keyword' | 'creator' | 'both' | null
   image_url: string | null
   media?: PostMedia | null
-  imageGroupSize?: number
 }
 
 /* eslint-disable @next/next/no-img-element */
@@ -149,11 +148,6 @@ export function PostCard({ post }: { post: PostCardPost }) {
             >
               {badge.emoji}
               {badge.label}
-            </span>
-          )}
-          {post.imageGroupSize !== undefined && post.imageGroupSize > 1 && (
-            <span className="post-card__group" data-testid="group-size">
-              {post.imageGroupSize} similar
             </span>
           )}
         </span>

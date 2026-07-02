@@ -89,9 +89,20 @@ export function findContentClusters(
       }
     }
 
+    // Cohesion = average pairwise combined similarity among the members (>=1 pair; size >= 2).
+    let simSum = 0
+    let simCount = 0
+    for (let a = 0; a < members.length; a++) {
+      for (let b = a + 1; b < members.length; b++) {
+        simSum += sim[members[a]!]![members[b]!]!
+        simCount++
+      }
+    }
+
     result.push({
       postIds: members.map((m) => posts[m]!.id),
       label: firstSentence(posts[best]!.content),
+      similarity: simSum / simCount,
       totalLikes: members.reduce((s, m) => s + posts[m]!.likes, 0),
       totalShares: members.reduce((s, m) => s + posts[m]!.shares, 0),
     })

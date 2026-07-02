@@ -3,7 +3,7 @@
 import { CANDIDATE_CAP, TIMEFRAME_DAYS } from '@/lib/config'
 import { getDb } from '@/lib/db/db'
 import { blobToVector } from '@/lib/pure/vector-blob'
-import type { PostRow, PostWithMedia, SortMode, Timeframe } from '@/lib/types'
+import type { PostRow, SortMode, Timeframe } from '@/lib/types'
 
 export interface PostFilters {
   platform?: 'linkedin' | 'twitter' | 'all'
@@ -158,10 +158,17 @@ export function searchPosts(filters: PostFilters): {
   return { posts, total, page, pageSize, hasMore: offset + posts.length < total }
 }
 
+/** A full post row plus its decoded vectors — carries every field so the UI can render the member
+ *  cards of a group while the pure clustering fns read only the vectors + engagement they need. */
+export interface ClusteringCandidate extends PostRow {
+  textEmbedding: number[] | null
+  imageEmbedding: number[] | null
+}
+
 export function getCandidatesForClustering(
   filters: PostFilters,
   requireImageEmbedding: boolean,
-): PostWithMedia[] {
+): ClusteringCandidate[] {
   const db = getDb()
   const { clause, params } = buildWhere(filters)
   const extra = requireImageEmbedding
@@ -170,22 +177,11 @@ export function getCandidatesForClustering(
   const where = clause ? `${clause} AND ${extra}` : `WHERE ${extra}`
 
   const rows = db
-    .prepare(
-      `SELECT id, content, image_description, image_url, likes, shares, embedding, image_embedding
-       FROM posts ${where} ORDER BY likes DESC LIMIT ?`,
-    )
-    .all(...params, CANDIDATE_CAP) as (Pick<
-    PostRow,
-    'id' | 'content' | 'image_description' | 'image_url' | 'likes' | 'shares' | 'embedding' | 'image_embedding'
-  >)[]
+    .prepare(`SELECT ${POST_COLUMNS} FROM posts ${where} ORDER BY likes DESC LIMIT ?`)
+    .all(...params, CANDIDATE_CAP) as PostRow[]
 
   return rows.map((r) => ({
-    id: r.id,
-    content: r.content,
-    image_description: r.image_description,
-    image_url: r.image_url,
-    likes: r.likes,
-    shares: r.shares,
+    ...r,
     textEmbedding: blobToVector(r.embedding),
     imageEmbedding: blobToVector(r.image_embedding),
   }))
@@ -242,10 +238,15 @@ export function updateXFactor(
     .run(values.weighted_score, values.creator_baseline, values.x_factor, id)
 }
 
+// A post still needs enrichment when it's missing its text embedding, OR it has a thumbnail
+// (image_url) but no image_embedding yet — the latter backfills posts (e.g. videos/documents) that
+// were text-embedded before their poster thumbnail existed, so group-by-image (§9) can see them.
+const UNEMBEDDED_WHERE = 'embedding IS NULL OR (image_url IS NOT NULL AND image_embedding IS NULL)'
+
 export function getUnembedded(limit: number, opts?: { reEmbed?: boolean }): PostRow[] {
-  // Default: only rows still missing a text embedding (never re-embed). With reEmbed, load every
-  // post up to the limit so a caller can refresh embeddings after adding image descriptions (§7.3).
-  const where = opts?.reEmbed ? '' : 'WHERE embedding IS NULL'
+  // Default: rows still missing an embedding (never re-embed a complete one). With reEmbed, load
+  // every post up to the limit so a caller can refresh embeddings after adding image descriptions.
+  const where = opts?.reEmbed ? '' : `WHERE ${UNEMBEDDED_WHERE}`
   return getDb()
     .prepare(`SELECT ${POST_COLUMNS} FROM posts ${where} ORDER BY scraped_at ASC LIMIT ?`)
     .all(limit) as PostRow[]
@@ -253,7 +254,7 @@ export function getUnembedded(limit: number, opts?: { reEmbed?: boolean }): Post
 
 export function countUnembedded(): number {
   return (
-    getDb().prepare('SELECT COUNT(*) AS n FROM posts WHERE embedding IS NULL').get() as { n: number }
+    getDb().prepare(`SELECT COUNT(*) AS n FROM posts WHERE ${UNEMBEDDED_WHERE}`).get() as { n: number }
   ).n
 }
 
