@@ -106,9 +106,9 @@ the same change.**
 This is the *research* half only. **Out of scope — do not add:** post generation / drafts, voice
 profiles, a stored `trends`/`trend_posts` table, a Claude trend-clustering job, cron / scheduling,
 auth, multi-user, or billing. Grouping is a **live on-demand embedding view**, not a persisted
-artifact. (In scope, and not to be confused with the above: the saved `keywords`, `saved_searches`,
-and read-only scrape history — PRD §11.6.) If a task seems to need something out of scope, stop and
-confirm — it's probably scope creep.
+artifact. (In scope, and not to be confused with the above: the saved `keywords` and read-only
+scrape history — PRD §11.6.) If a task seems to need something out of scope, stop and confirm — it's
+probably scope creep.
 
 ---
 

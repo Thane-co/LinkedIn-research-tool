@@ -391,20 +391,6 @@ CREATE INDEX IF NOT EXISTS keywords_market_idx ON keywords(market);
 > present as the initial market shown in the editor. Users add their own terms — no keyword set is
 > bundled or opinionated.
 
-### 6.6 `saved_searches` — filter presets (Layer 6, §11.6)
-
-A named snapshot of the Search filter row. **Not** a stored result set (no "trends" artefact —
-N1/N3 still hold); selecting one just repopulates the filters and re-queries live.
-
-```sql
-CREATE TABLE IF NOT EXISTS saved_searches (
-  id         TEXT PRIMARY KEY,            -- crypto.randomUUID()
-  name       TEXT NOT NULL,
-  params     TEXT NOT NULL,               -- JSON.stringify of the filter state
-  created_at TEXT NOT NULL                -- ISO-8601 UTC
-);
-```
-
 ---
 
 ## 7. Embeddings specification
@@ -815,15 +801,13 @@ Two screens: **Search** (the default dashboard) and **Scrape Settings** (creator
 ├──────────────────────────────────────────────────────────────────────────────────────────┤
 │ [Keywords… ] [Creators (516) ▾] [♥ 750] [↗ 0] [✕ 0] [Newest ▾] [Last week ▾] [Framework ▾] │
 │                                                              [LinkedIn ✕] [   Search   ]      │
-│ Saved searches (2) ▾                                                                         │
 ├──────────────────────────────────────────────────────────────────────────────────────────┤
 │ ┌─ card ───────────────┐  ┌─ card ───────────────┐  ┌─ card ───────────────┐               │
-│ │ ☐ (A) Alex Wang    + │  │ ☐ (C) Chris Donnelly + │  │ ☐ (N) Natan Mohart + │               │
-│ │      Jun 26, 2026    │  │      Jun 26, 2026    │  │      Jun 26, 2026    │               │
+│ │ (A) Alex Wang   🔗 in│  │ (C) Chris Donnelly🔗in │  │ (N) Natan Mohart 🔗in│               │
+│ │     Jun 26, 2026     │  │     Jun 26, 2026     │  │     Jun 26, 2026     │               │
 │ │  content …see more   │  │  content …see more   │  │  content …see more   │               │
 │ │  [    image    ]     │  │  [    image    ]     │  │  [    image    ]     │               │
-│ │  👍1,710 💬92 🔁86    │  │  👍984 💬273 🔁106    │  │  👍1,143 💬159 🔁199  │               │
-│ │  0.8×  [both]    in  │  │  1.2×  [creator] in  │  │        [keyword] in  │               │
+│ │ 👍1,710 💬92 🔁86 [both] 0.8× │  👍984 💬273 🔁106 [creator]1.2× │  👍1,143 💬159 🔁199 [keyword] │  │
 │ └──────────────────────┘  └──────────────────────┘  └──────────────────────┘               │
 │  … responsive masonry grid; "list" view is the same cards stacked full-width …               │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
@@ -846,13 +830,13 @@ Filter row → `/api/posts` params (§11.1):
 | Framework ▾ (market) | `market` *(§11.6)* |
 | LinkedIn ✕ (platform pill; ✕ clears to All) | `platform` |
 | Search | re-fetch |
-| Saved searches (2) ▾ | *(§11.6)* |
 
-Post card: selection **checkbox** + **＋** (add this author to creators) top corners; avatar + author +
-**posted date**; content with **…see more** expand; optional image; engagement row **👍 likes · 💬
-comments · 🔁 shares**; **x-factor badge** (≥2× green 🔥 / 0.5–2× gray / <0.5× red / hidden when null);
-**scrape-source badge** (`both`/`creator`/`keyword`); **platform** icon. In image-group view each card
-also shows its group-size indicator.
+Post card header: avatar + author + **posted date** on the left; a **🔗 link to the original post**
+(opens in a new tab) and the **platform** badge on the right. Body: content with **…see more** expand;
+optional image. Footer: engagement **👍 likes · 💬 comments · 🔁 shares** on the left, and on the right
+the **scrape-source badge** (`both`/`creator`/`keyword`) + **x-factor badge** (≥2× green 🔥 / 0.5–2×
+gray / <0.5× red / hidden when null) + (in image-group view) the group-size indicator. No selection
+checkbox and no add-to-creators button — creators are managed on the Scrape Settings screen.
 
 ### Screen B — Scrape Settings
 
@@ -896,9 +880,9 @@ of the scrape set; **Bulk import** = paste many, one per line; **Remove** delete
 > creator/both run. There is no "watch/core" split or "auto-scraped / scraped weekly" wording — it
 > would imply a schedule (and a tier) that don't exist in the UI.
 
-## 11.6 Keywords, saved searches & scrape history
+## 11.6 Keywords & scrape history
 
-Three local-only capabilities the wireframes show (SQLite, no new external calls). Built in Layer 6
+Two local-only capabilities the wireframes show (SQLite, no new external calls). Built in Layer 6
 (§12) once the core read/scrape loop and UI are in place.
 
 - **Scrape history** — `listRecentJobs(limit = 20)` on `jobs.repo.ts` + `GET /api/scrape/history`
@@ -908,10 +892,6 @@ Three local-only capabilities the wireframes show (SQLite, no new external calls
   `(market, term)`, §6.5). `GET/POST/DELETE /api/keywords` grouped by market; markets are the distinct
   `market` values. Feeds the Keywords editor and prefills the Manual-Scrape keyword set; the `market`
   filter on `GET /api/posts` reads `posts.market`.
-- **Saved searches** — a `saved_searches` table (`id`, `name`, `params` JSON, `created_at`, §6.6).
-  `GET/POST/DELETE /api/saved-searches`; selecting one repopulates the filter row. Purely a filter
-  preset — **not** a stored result set (no "trends" artefact; N1/N3 still hold).
-
 ## 11.7 Visual design system
 
 A clean, minimal SaaS look (matches the §11.5 wireframes): light page, white cards with a hairline
@@ -1097,10 +1077,12 @@ Order within the layer (each independent, can be parallelized):
     key; edit actor ids; "Test connection" per provider (green/red). On first run (no keys), the
     app opens here and gates Scrape until Apify+Voyage are set. *Tests:* save calls PUT; gate
     shows when `ready.apify`/`ready.voyage` false.
-27. **`PostCard`** — selection checkbox + ＋(add author), avatar + author + posted date, content
-    (truncate/…see more), engagement 👍/💬/🔁, platform badge, scrape-source badge, **x-factor badge**
-    (≥2× green 🔥 / 0.5–2× gray / <0.5× red / hidden when null), image, group-size indicator.
-28. **`DashboardFilterBar`** — single search row (Screen A): keywords chips, creator dropdown (count),
+27. **`PostCard`** — header: author + posted date, **🔗 link to the original post** (new tab) +
+    platform badge; body: content (truncate/…see more) + optional image; footer: engagement 👍/💬/🔁
+    on the left and, on the right, scrape-source badge + **x-factor badge** (≥2× green 🔥 / 0.5–2× gray
+    / <0.5× red / hidden when null) + group-size indicator. No checkbox, no add-author button.
+28. **`DashboardFilterBar`** — single search row (Screen A): keywords chips, creator dropdown
+    (collapsed `<details>` with All/None + a checkbox per creator, count in the summary),
     ♥ minLikes / ↗ minShares / ✕ minXFactor, sort, **timeframe select + custom range**, market select,
     platform pill, **Search**. Group-by-image / Discover-trends live in the header (step 30).
 29. **`CreatorManager`** — a single creator list (all part of the scrape set); add one (URL/@handle),
@@ -1116,12 +1098,10 @@ Order within the layer (each independent, can be parallelized):
     Search disabled until Apify+Voyage are set. `ScrapeSettings` composes `SettingsPanel` +
     `CreatorManager` + `ManualScrape` (+ Keywords & History once Layer 6 lands).
 
-### Layer 6 — Keywords, saved searches & scrape history (§11.6)
+### Layer 6 — Keywords & scrape history (§11.6)
 32. **Scrape history** — `listRecentJobs(20)` + `GET /api/scrape/history` + the history table.
 33. **Markets + saved keywords** — `keywords` table, `GET/POST/DELETE /api/keywords`, the Keywords
     editor, `market` filter on `/api/posts`, and Manual-Scrape prefill.
-34. **Saved searches** — `saved_searches` table, `GET/POST/DELETE /api/saved-searches`, the
-    "Saved searches" dropdown that repopulates the filter row.
 
 ---
 
@@ -1207,7 +1187,7 @@ the only way to "lose" keys.)
 10. No network calls to Vercel or Supabase anywhere. Only Apify + Voyage (+ optional Anthropic),
     each using the **user's own** keys.
 11. **Layer 6 (§11.6):** the scrape-history table populates from `scrape_jobs`; per-market keyword
-    sets persist and prefill Manual Scrape; saved searches persist and repopulate the filter row.
+    sets persist and prefill Manual Scrape.
 
 ---
 
