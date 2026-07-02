@@ -6,7 +6,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { DashboardFilterBar, type AuthorOption, type Filters } from '@/app/DashboardFilterBar'
 import { PostCard, type PostCardPost } from '@/app/PostCard'
-import { SavedSearches } from '@/app/SavedSearches'
 
 interface ImageGroup {
   postIds: string[]
@@ -85,16 +84,6 @@ export function DashboardClient() {
     void load()
   }, [load])
 
-  async function addAuthor(post: PostCardPost): Promise<void> {
-    if (!post.author_id) return
-    const input = post.platform === 'twitter' ? `@${post.author_id}` : `https://www.linkedin.com/in/${post.author_id}`
-    await fetch('/api/creators', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ input }),
-    })
-  }
-
   const total = data.total ?? data.posts.length
   const grouping = Boolean(data.imageGroups || data.contentClusters)
 
@@ -134,7 +123,6 @@ export function DashboardClient() {
       </header>
 
       <DashboardFilterBar filters={filters} availableAuthors={data.availableAuthors} onChange={setFilters} onSearch={load} />
-      <SavedSearches current={filters} onApply={(p) => setFilters((f) => ({ ...f, ...p }))} />
 
       {data.imageGroups ? (
         <ul className="dashboard__groups">
@@ -157,7 +145,7 @@ export function DashboardClient() {
       ) : (
         <div className={`dashboard__results dashboard__results--${grouping ? 'grid' : view}`}>
           {data.posts.map((p) => (
-            <PostCard key={p.id} post={p} onAddAuthor={addAuthor} />
+            <PostCard key={p.id} post={p} />
           ))}
         </div>
       )}

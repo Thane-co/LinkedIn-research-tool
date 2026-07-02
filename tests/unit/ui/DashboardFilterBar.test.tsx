@@ -30,6 +30,20 @@ describe('DashboardFilterBar', () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ platform: 'twitter' }))
   })
 
+  it('selects a creator via the dropdown checkbox', async () => {
+    const onChange = vi.fn()
+    render(<DashboardFilterBar filters={baseFilters()} availableAuthors={authors} onChange={onChange} />)
+    await userEvent.click(screen.getByLabelText('Jane'))
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ authors: ['jane'] }))
+  })
+
+  it('clears creators with None', async () => {
+    const onChange = vi.fn()
+    render(<DashboardFilterBar filters={baseFilters({ authors: ['jane'] })} availableAuthors={authors} onChange={onChange} />)
+    await userEvent.click(screen.getByRole('button', { name: /^none$/i }))
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ authors: [] }))
+  })
+
   it('fires onSearch when the Search button is clicked', async () => {
     const onSearch = vi.fn()
     render(

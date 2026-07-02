@@ -83,20 +83,36 @@ export function DashboardFilterBar({
         </label>
       </div>
 
-      <label className="filter-bar__field">
-        Creators ({filters.authors.length}/{availableAuthors.length})
-        <select
-          multiple
-          value={filters.authors}
-          onChange={(e) => set({ authors: Array.from(e.target.selectedOptions, (o) => o.value) })}
-        >
+      <details className="filter-bar__field filter-bar__creators">
+        <summary>Creators ({filters.authors.length}/{availableAuthors.length})</summary>
+        <div className="filter-bar__creators-panel">
+          <div className="filter-bar__creators-actions">
+            <button type="button" onClick={() => set({ authors: availableAuthors.map((a) => a.author_id) })}>
+              All
+            </button>
+            <button type="button" onClick={() => set({ authors: [] })}>
+              None
+            </button>
+          </div>
+          {availableAuthors.length === 0 && <span className="filter-bar__creators-empty">No creators yet</span>}
           {availableAuthors.map((a) => (
-            <option key={a.author_id} value={a.author_id}>
+            <label key={a.author_id} className="filter-bar__creator">
+              <input
+                type="checkbox"
+                checked={filters.authors.includes(a.author_id)}
+                onChange={(e) =>
+                  set({
+                    authors: e.target.checked
+                      ? [...filters.authors, a.author_id]
+                      : filters.authors.filter((x) => x !== a.author_id),
+                  })
+                }
+              />
               {a.author_name ?? a.author_id}
-            </option>
+            </label>
           ))}
-        </select>
-      </label>
+        </div>
+      </details>
 
       <label className="filter-bar__field" title="minimum likes">
         Min likes

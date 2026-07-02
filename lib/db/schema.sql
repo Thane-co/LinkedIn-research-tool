@@ -106,12 +106,3 @@ CREATE TABLE IF NOT EXISTS keywords (
   UNIQUE(market, term)
 );
 CREATE INDEX IF NOT EXISTS keywords_market_idx ON keywords(market);
-
--- 6.6 saved_searches — filter presets (Layer 6) -----------------------------
--- A named snapshot of the Search filter row. NOT a stored result set (no trends artefact).
-CREATE TABLE IF NOT EXISTS saved_searches (
-  id         TEXT PRIMARY KEY,            -- crypto.randomUUID()
-  name       TEXT NOT NULL,
-  params     TEXT NOT NULL,               -- JSON.stringify of the filter state
-  created_at TEXT NOT NULL                -- ISO-8601 UTC
-);

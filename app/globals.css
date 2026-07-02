@@ -255,6 +255,72 @@ button[aria-pressed='true'] {
 .filter-bar__field input[type='number'] {
   width: 84px;
 }
+
+/* Creators dropdown (collapsed <details>) */
+.filter-bar__creators {
+  position: relative;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.filter-bar__creators > summary {
+  list-style: none;
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.filter-bar__creators > summary::-webkit-details-marker {
+  display: none;
+}
+.filter-bar__creators > summary::after {
+  content: ' ▾';
+  color: var(--text-muted);
+}
+.filter-bar__creators-panel {
+  position: absolute;
+  z-index: 20;
+  margin-top: 4px;
+  min-width: 220px;
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+}
+.filter-bar__creators-actions {
+  display: flex;
+  gap: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
+}
+.filter-bar__creators-actions button {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+.filter-bar__creator {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+.filter-bar__creators-empty {
+  color: var(--text-muted);
+  font-weight: 500;
+  padding: 4px;
+}
 .filter-bar__search {
   margin-left: auto;
 }
@@ -310,13 +376,20 @@ button[aria-pressed='true'] {
   color: var(--text-muted);
   font-size: 12px;
 }
-.post-card__add {
+.post-card__head-right {
   margin-left: auto;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border-radius: var(--radius-pill);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.post-card__link {
+  text-decoration: none;
+  font-size: 15px;
   line-height: 1;
+  opacity: 0.75;
+}
+.post-card__link:hover {
+  opacity: 1;
 }
 .post-card__content {
   margin: 0;
@@ -345,8 +418,14 @@ button[aria-pressed='true'] {
 .post-card__stats .stat b {
   color: var(--text);
 }
-.post-card__group {
+/* scrape-source + x-factor + group-size badges, pushed to the right by the engagement numbers */
+.post-card__badges {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.post-card__group {
   font-size: 12px;
   font-weight: 600;
   color: var(--primary);

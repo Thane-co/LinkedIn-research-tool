@@ -32,7 +32,6 @@ describe('Page (readiness gate)', () => {
     server.use(
       http.get('*/api/settings', () => HttpResponse.json(settings({ apify: true, voyage: true }))),
       http.get('*/api/posts', () => HttpResponse.json(emptyPosts)),
-      http.get('*/api/saved-searches', () => HttpResponse.json({ searches: [] })),
     )
     render(<Page />)
     expect(await screen.findByRole('heading', { name: /search posts/i })).toBeInTheDocument()

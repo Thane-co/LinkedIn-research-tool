@@ -1,6 +1,7 @@
 'use client'
-// Layer 5 — PostCard (PRD §12 step 27): author, content (truncate/expand), engagement, platform
-// badge, scrape-source badge, x-factor badge (>=2x green 🔥, 0.5-2x gray, <0.5x red), image, group size.
+// Layer 5 — PostCard (PRD §12 step 27): author + date, a link to the original post, platform badge;
+// content (truncate/expand); optional image; footer with engagement (👍/💬/🔁) and — on the right —
+// the scrape-source badge + x-factor badge (>=2x green 🔥, 0.5-2x gray, <0.5x red) + group size.
 
 import { useState } from 'react'
 import { xFactorBadge } from '@/lib/pure/badge'
@@ -33,17 +34,7 @@ function formatDate(iso: string | null | undefined): string {
   return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`
 }
 
-export function PostCard({
-  post,
-  selected = false,
-  onToggleSelect,
-  onAddAuthor,
-}: {
-  post: PostCardPost
-  selected?: boolean
-  onToggleSelect?: (id: string) => void
-  onAddAuthor?: (post: PostCardPost) => void
-}) {
+export function PostCard({ post }: { post: PostCardPost }) {
   const [expanded, setExpanded] = useState(false)
   const content = post.content ?? ''
   const isLong = content.length > TRUNCATE_AT
@@ -54,35 +45,23 @@ export function PostCard({
   return (
     <article className="post-card">
       <header className="post-card__head">
-        <input
-          type="checkbox"
-          className="post-card__select"
-          aria-label={`select post by ${post.author_name ?? 'unknown'}`}
-          checked={selected}
-          onChange={() => onToggleSelect?.(post.id)}
-        />
         <span className="post-card__author">{post.author_name ?? 'Unknown'}</span>
         {post.posted_at && <time className="post-card__date">{formatDate(post.posted_at)}</time>}
-        <button
-          type="button"
-          className="post-card__add"
-          aria-label={`add ${post.author_name ?? 'author'} to creators`}
-          onClick={() => onAddAuthor?.(post)}
-        >
-          ＋
-        </button>
-        <span className={`badge badge--platform badge--${post.platform}`}>{post.platform}</span>
-        {post.scrape_source && <span className="badge badge--source">{post.scrape_source}</span>}
-        {badge.tone !== 'none' && (
-          <span
-            className={`badge badge--xfactor badge--${badge.tone}`}
-            data-testid="xfactor-badge"
-            data-tone={badge.tone}
-          >
-            {badge.emoji}
-            {badge.label}
-          </span>
-        )}
+        <span className="post-card__head-right">
+          {post.url && (
+            <a
+              className="post-card__link"
+              href={post.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="open the original post"
+              title="Open the original post"
+            >
+              🔗
+            </a>
+          )}
+          <span className={`badge badge--platform badge--${post.platform}`}>{post.platform}</span>
+        </span>
       </header>
 
       {post.image_url && (
@@ -107,11 +86,25 @@ export function PostCard({
         <span className="stat" title="shares">
           🔁 <b>{post.shares}</b>
         </span>
-        {post.imageGroupSize !== undefined && post.imageGroupSize > 1 && (
-          <span className="post-card__group" data-testid="group-size">
-            {post.imageGroupSize} similar
-          </span>
-        )}
+
+        <span className="post-card__badges">
+          {post.scrape_source && <span className="badge badge--source">{post.scrape_source}</span>}
+          {badge.tone !== 'none' && (
+            <span
+              className={`badge badge--xfactor badge--${badge.tone}`}
+              data-testid="xfactor-badge"
+              data-tone={badge.tone}
+            >
+              {badge.emoji}
+              {badge.label}
+            </span>
+          )}
+          {post.imageGroupSize !== undefined && post.imageGroupSize > 1 && (
+            <span className="post-card__group" data-testid="group-size">
+              {post.imageGroupSize} similar
+            </span>
+          )}
+        </span>
       </footer>
     </article>
   )

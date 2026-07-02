@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { PostCard, type PostCardPost } from '@/app/PostCard'
 
 const makePost = (over: Partial<PostCardPost> = {}): PostCardPost => ({
@@ -30,11 +30,13 @@ describe('PostCard', () => {
     expect(screen.getByText(/both/i)).toBeInTheDocument()
   })
 
-  it('invokes add-to-creators from the ＋ affordance', async () => {
-    const onAddAuthor = vi.fn()
-    render(<PostCard post={makePost()} onAddAuthor={onAddAuthor} />)
-    await userEvent.click(screen.getByRole('button', { name: /add jane doe to creators/i }))
-    expect(onAddAuthor).toHaveBeenCalledWith(expect.objectContaining({ id: 'p1' }))
+  it('links to the original post (new tab) and has no selection checkbox', () => {
+    render(<PostCard post={makePost({ url: 'https://www.linkedin.com/feed/update/urn:li:activity:99/' })} />)
+    const link = screen.getByRole('link', { name: /open the original post/i })
+    expect(link).toHaveAttribute('href', 'https://www.linkedin.com/feed/update/urn:li:activity:99/')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /add .* to creators/i })).not.toBeInTheDocument()
   })
 
   it('shows a green 🔥 x-factor badge for a viral post and hides it when null', () => {
