@@ -432,16 +432,18 @@ function buildEmbeddingText(content: string | null, imageDescription?: string | 
 - **Never re-embed** a post that already has `embedding` unless an explicit `reEmbed`
   flag is passed (used after image descriptions are added). The unembedded loader
   (`getUnembedded(limit, { reEmbed })`) selects a post when it is **missing its text embedding OR it
-  has a thumbnail (`image_url IS NOT NULL`) but no `image_embedding`** — the second clause backfills
-  posts (e.g. **videos and documents**) that were text-embedded before their poster/cover thumbnail
-  existed, so group-by-image (§9) sees them. Under `reEmbed` the filter is dropped entirely.
-  `countUnembedded` uses the same predicate so `remaining` reaches 0.
+  has a thumbnail (`image_url IS NOT NULL`) but no `image_embedding`**. The second clause guarantees
+  every post with a thumbnail — image, video poster, or document cover — receives an image embedding,
+  independently of whether its text embedding is already present, so group-by-image (§9) sees them all.
+  Under `reEmbed` the filter is dropped entirely. `countUnembedded` uses the same predicate so
+  `remaining` reaches 0.
 
 **Enrich contract** (`enrichPosts(limit, { reEmbed? }) → { embedded, remaining }`, Layer 3):
 - Load ≤`limit` candidates, build each embedding text (§7.2), batch-embed, write BLOBs.
 - Only call Voyage **text** embedding for candidates actually missing a text embedding (or all, under
-  `reEmbed`). A candidate selected only to **backfill** a missing image embedding **reuses its stored
-  text vector** and just embeds the thumbnail — so filling in a poster never re-embeds text.
+  `reEmbed`). A candidate that already has a text embedding but is selected for its missing image
+  embedding **reuses its stored text vector** and only embeds the thumbnail — text is never re-embedded
+  to add an image.
 - `embedded` = posts written this call; `remaining` = posts still lacking an embedding afterward
   (`countUnembedded()`), so a caller can loop until the backlog drains.
 - A batch-level Voyage failure **throws** (the caller logs it non-fatally, §10.5). Per-image work is
@@ -676,8 +678,8 @@ Confirmed from real `harvestapi/linkedin-post-search` output. Returns `{ media, 
 
 `image_url` = `thumbnail`, so the enrich job embeds it and image-grouping (§9) spans image posts **and
 document/video thumbnails** (e.g. the "same carousel" case) uniformly. The full `media` JSON drives
-card rendering (§11.5). `raw_data` still preserves the entire payload, so existing rows can be
-**backfilled** by re-running `extractMedia` over `raw_data`.
+card rendering (§11.5). `raw_data` preserves the entire payload, so `extractMedia` can be recomputed
+from it at any time.
 
 `PostMedia` (types.ts):
 ```ts
@@ -1112,12 +1114,12 @@ Order within the layer (each independent, can be parallelized):
 
 ### Layer 3 — Orchestration jobs
 20. **`jobs/enrich.ts`** — `enrichPosts(limit, {reEmbed}) → { embedded, remaining }` (§7.3): load
-    unembedded posts, text-embed only those missing a text vector (reuse the stored vector for
-    image-backfill posts), embed thumbnails, write BLOBs; per-image embed/describe is non-fatal and
-    preserves an existing description. *Tests:* mocks repo + voyage; never re-embeds unless `reEmbed`
-    (flag threads to the loader); text-only vs image post write paths; **image-only backfill embeds
-    the thumbnail without re-embedding text**; per-image failure still writes the text vector;
-    `remaining` count correct.
+    unembedded posts, text-embed only those missing a text vector (reuse the stored vector for posts
+    that need only their image embedded), embed thumbnails, write BLOBs; per-image embed/describe is
+    non-fatal and preserves an existing description. *Tests:* mocks repo + voyage; never re-embeds
+    unless `reEmbed` (flag threads to the loader); text-only vs image post write paths; **a post that
+    needs only its image embeds the thumbnail without re-embedding text**; per-image failure still
+    writes the text vector; `remaining` count correct.
 21. **`jobs/scrape.ts`** — `runScrape` (§10.5, accepts an optional pre-created `jobId`) +
     `recomputeXFactors` (§8.4). *Tests:* keyword + creator run in parallel; stats incl. duplicate/both
     counts; one scraper empty still completes; **every scraper failing → job 'failed'** (and enrich is
