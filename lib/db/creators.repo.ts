@@ -1,7 +1,7 @@
-// Layer 2 — creator CRUD + promote logic (PRD §11.2, §12 step 14).
+// Layer 2 — creator CRUD (PRD §11.2, §12 step 14).
 // Storage only: platform detection / url normalization / author_id derivation happen at the route
-// layer (using lib/pure/url.ts). Re-adding an existing creator promotes watch->core and never
-// downgrades a core creator.
+// layer (using lib/pure/url.ts). Every creator is 'core' (the scrape set); re-adding an existing
+// creator is idempotent — it updates the display fields and never creates a duplicate.
 
 import { getDb } from '@/lib/db/db'
 import type { CreatorRow, CreatorTier, Platform } from '@/lib/types'
@@ -26,14 +26,14 @@ function getByUrl(profileUrl: string): CreatorRow | undefined {
     .get(profileUrl) as CreatorRow | undefined
 }
 
-/** Insert a new creator, or promote/enrich an existing one (matched by profile_url). */
+/** Insert a new creator, or enrich an existing one (matched by profile_url). Idempotent re-add. */
 export function upsertCreator(creator: NewCreator): CreatorRow {
   const db = getDb()
   const now = new Date().toISOString()
   const existing = getByUrl(creator.profile_url)
 
   if (existing) {
-    // Promote to core (never downgrade); fill in any newly-provided display fields.
+    // Keep it in the scrape set (tier 'core'); fill in any newly-provided display fields.
     db.prepare(
       `UPDATE creators SET tier = 'core',
          display_name = COALESCE(?, display_name),
@@ -58,7 +58,7 @@ export function upsertCreator(creator: NewCreator): CreatorRow {
     author_id: creator.author_id ?? null,
     display_name: creator.display_name ?? null,
     avatar_url: creator.avatar_url ?? null,
-    tier: creator.tier ?? 'watch',
+    tier: creator.tier ?? 'core',
     tags: JSON.stringify(creator.tags ?? []),
     market: creator.market ?? 'ai',
     notes: creator.notes ?? null,

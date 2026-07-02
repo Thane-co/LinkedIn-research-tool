@@ -39,13 +39,12 @@ describe('POST /api/creators', () => {
     expect(creators.find((c: { author_id: string }) => c.author_id === 'jane-doe').display_name).toBe('Jane Doe')
   })
 
-  it('adds many at once and promotes an existing watch creator to core on re-add', async () => {
-    await POST(postJson({ input: 'https://www.linkedin.com/in/jane-doe' })) // watch by default
+  it('adds many at once; re-adding an existing creator is idempotent (no duplicate)', async () => {
+    await POST(postJson({ input: 'https://www.linkedin.com/in/jane-doe' }))
     const { creators } = await (
       await POST(postJson({ inputs: ['https://www.linkedin.com/in/jane-doe', '@joe'] }))
     ).json()
-    const jane = creators.find((c: { author_id: string }) => c.author_id === 'jane-doe')
-    expect(jane.tier).toBe('core') // promoted
+    expect(creators.filter((c: { author_id: string }) => c.author_id === 'jane-doe')).toHaveLength(1)
     expect(creators.some((c: { author_id: string }) => c.author_id === 'joe')).toBe(true)
   })
 
@@ -56,8 +55,8 @@ describe('POST /api/creators', () => {
 })
 
 describe('GET /api/creators', () => {
-  it('lists creators with distinct tags and filters by platform/tier/tag', async () => {
-    await POST(postJson({ input: 'https://www.linkedin.com/in/jane-doe', tier: 'core', tags: ['ai'] }))
+  it('lists creators with distinct tags and filters by platform/tag', async () => {
+    await POST(postJson({ input: 'https://www.linkedin.com/in/jane-doe', tags: ['ai'] }))
     await POST(postJson({ input: '@joe', tags: ['news'] }))
 
     const all = await (await GET(new Request('http://localhost/api/creators'))).json()
@@ -66,9 +65,6 @@ describe('GET /api/creators', () => {
 
     const li = await (await GET(new Request('http://localhost/api/creators?platform=linkedin'))).json()
     expect(li.creators.map((c: { author_id: string }) => c.author_id)).toEqual(['jane-doe'])
-
-    const core = await (await GET(new Request('http://localhost/api/creators?tier=core'))).json()
-    expect(core.creators.map((c: { author_id: string }) => c.author_id)).toEqual(['jane-doe'])
 
     const tagged = await (await GET(new Request('http://localhost/api/creators?tag=news'))).json()
     expect(tagged.creators.map((c: { author_id: string }) => c.author_id)).toEqual(['joe'])

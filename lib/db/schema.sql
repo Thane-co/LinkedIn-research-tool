@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS creators (
   author_id     TEXT,                          -- clean slug/handle for x-factor matching
   display_name  TEXT,
   avatar_url    TEXT,
-  tier          TEXT NOT NULL DEFAULT 'watch', -- 'core' | 'watch' (controls who the creator-scraper pulls)
+  tier          TEXT NOT NULL DEFAULT 'core',  -- every creator is 'core' (the scrape set); retained for that filter
   tags          TEXT NOT NULL DEFAULT '[]',    -- JSON array of strings
   market        TEXT NOT NULL DEFAULT 'ai',
   notes         TEXT,

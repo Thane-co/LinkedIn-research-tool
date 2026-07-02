@@ -45,7 +45,7 @@ export function CreatorManager() {
     await fetch('/api/creators', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ inputs: [input], tier: 'core', tags: parseTags(tags) }),
+      body: JSON.stringify({ inputs: [input], tags: parseTags(tags) }),
     })
     setUrl('')
     setTags('')
@@ -58,7 +58,7 @@ export function CreatorManager() {
     await fetch('/api/creators', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ inputs, tier: 'core' }),
+      body: JSON.stringify({ inputs }),
     })
     setBulk('')
     setShowBulk(false)

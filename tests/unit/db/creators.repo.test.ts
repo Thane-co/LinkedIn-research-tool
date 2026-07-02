@@ -15,33 +15,23 @@ const jane = (over: Partial<NewCreator> = {}): NewCreator => ({
 })
 
 describe('upsertCreator', () => {
-  it('inserts a new creator with a generated id and watch tier by default', () => {
+  it('inserts a new creator with a generated id, in the scrape set (tier core) by default', () => {
     const row = upsertCreator(jane())
     expect(row.id).toBeTruthy()
-    expect(row.tier).toBe('watch')
+    expect(row.tier).toBe('core')
     expect(row.author_id).toBe('jane')
     expect(row.tags).toBe('[]')
-  })
-
-  it('honors an explicit tier on insert', () => {
-    expect(upsertCreator(jane({ tier: 'core' })).tier).toBe('core')
   })
 
   it('serializes tags to a JSON array', () => {
     expect(upsertCreator(jane({ tags: ['ai', 'infra'] })).tags).toBe('["ai","infra"]')
   })
 
-  it('promotes an existing watch creator to core on re-add (no duplicate row)', () => {
-    upsertCreator(jane()) // watch
-    const promoted = upsertCreator(jane())
-    expect(promoted.tier).toBe('core')
-    expect(listCreators().creators).toHaveLength(1)
-  })
-
-  it('never downgrades a core creator back to watch', () => {
-    upsertCreator(jane({ tier: 'core' }))
-    const again = upsertCreator(jane({ tier: 'watch' }))
+  it('re-adding an existing creator is idempotent (no duplicate row, stays in the scrape set)', () => {
+    upsertCreator(jane())
+    const again = upsertCreator(jane())
     expect(again.tier).toBe('core')
+    expect(listCreators().creators).toHaveLength(1)
   })
 
   it('fills in display_name / avatar on re-add when newly provided', () => {
@@ -67,8 +57,8 @@ describe('listCreators', () => {
     expect([...tags].sort()).toEqual(['ai', 'infra'])
   })
 
-  it('filters by tier', () => {
-    expect(listCreators({ tier: 'core' }).creators).toHaveLength(1)
+  it('filters by tier (all creators are core = the scrape set)', () => {
+    expect(listCreators({ tier: 'core' }).creators).toHaveLength(2)
   })
 
   it('filters by platform', () => {
