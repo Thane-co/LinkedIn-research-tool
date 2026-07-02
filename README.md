@@ -97,3 +97,11 @@ the [LICENSE](LICENSE) file for the full terms. In short:
 - You may **not** share, redistribute, resell, publish, or give it to anyone else.
 - **Commercial use or sharing with others requires a separate paid license** — contact
   **Basia Kubicka (Thane & CO, LLC) · basia@before9.am** to arrange one.
+
+**⚠️ Beta software — no warranty, no support, use entirely at your own risk.** This is a pre-release,
+experimental version, **not** a finished or commercial off-the-shelf product. It is provided **"AS IS"
+and "AS AVAILABLE," with all faults**, with **no warranties of any kind** and **no support,
+maintenance, or updates**. To the maximum extent permitted by law, the author accepts **no liability
+whatsoever** for any damages, data loss, security breaches, data leakage, bugs, or harm to your
+systems or other software arising from its use. See the [LICENSE](LICENSE) (Sections 7–15) for the
+full terms. By installing or using it, you accept those terms.
