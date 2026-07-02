@@ -182,25 +182,34 @@ Dependency rule: **arrows point downward only.** A module never imports from a l
     /scrape.ts                   ← runScrape() orchestration                 (Layer 3)
     /enrich.ts                   ← enrichPosts() embeddings+desc             (Layer 3)
   /app
+    /globals.css                 ← design system: tokens + component styles   (Layer 5, §11.7)
+    /layout.tsx                  ← root layout; imports globals.css           (Layer 5)
     /api
       /posts/route.ts            ← GET posts (filter/paginate/group)         (Layer 4)
       /creators/route.ts         ← GET/POST/DELETE creators                  (Layer 4)
       /scrape/route.ts           ← POST start scrape                         (Layer 4)
       /scrape/[id]/route.ts      ← GET scrape job status                     (Layer 4)
+      /scrape/history/route.ts   ← GET last 20 runs                          (Layer 6)
       /settings/route.ts         ← GET/PUT BYO keys + actor ids              (Layer 4)
       /settings/test/route.ts    ← POST per-provider connection test         (Layer 4)
-    /page.tsx                    ← dashboard                                 (Layer 5)
-    /DashboardClient.tsx
-    /DashboardFilterBar.tsx
-    /PostCard.tsx
-    /CreatorManager.tsx
-    /SettingsPanel.tsx           ← onboarding / key entry + connection tests (Layer 5)
+      /keywords/route.ts         ← GET/POST/DELETE per-market keyword sets    (Layer 6)
+    /page.tsx                    ← readiness gate; nav Search ↔ Scrape Settings (Layer 5)
+    /DashboardClient.tsx         ← Search screen (header, filters, grid/groups) (Layer 5)
+    /DashboardFilterBar.tsx      ← the single search/filter row               (Layer 5)
+    /PostCard.tsx                ← one post card                              (Layer 5)
+    /ScrapeSettings.tsx          ← Scrape Settings screen (composes below)     (Layer 5)
+    /SettingsPanel.tsx           ← onboarding / key entry + connection tests  (Layer 5)
+    /CreatorManager.tsx          ← creator list, add / bulk / CSV, remove      (Layer 5)
+    /ManualScrape.tsx            ← Run scrape now + status pill                (Layer 5)
+    /KeywordsEditor.tsx          ← per-market keyword sets                     (Layer 6)
+    /ScrapeHistory.tsx           ← last-20-runs table                         (Layer 6)
   /tests
     /setup.ts
     /fixtures/{apify,voyage,posts}.ts
     /unit/pure/*.test.ts
     /unit/db/*.test.ts
     /unit/jobs/*.test.ts
+    /unit/ui/*.test.tsx          ← component tests (jsdom, §13)
     /integration/api/*.test.ts
 ```
 
