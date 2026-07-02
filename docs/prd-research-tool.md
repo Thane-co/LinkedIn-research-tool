@@ -851,13 +851,12 @@ also shows its group-size indicator.
 │ Apify API token  [•••• saved]      Voyage API key [•••• saved]   Anthropic key [ not set ]  │
 │ Actor ids:  keyword [harvestapi/…]  profile [harvestapi/…]  tweet [apidojo/…]               │
 │ [ Save ]  [ Test connection ]     ● apify ok   ● voyage ok   ○ anthropic (not set)          │
-├─ Core Creators   48 — pulled every scrape ───────────────────────────────  [ Bulk import ] ┤
-│ [Profile URL / @handle ........] [Name (optional)] [Tags: ai, founder] [Core ▾] [ Add ]     │
+├─ Creators   48 tracked ──────────────────────────────────────────────────  [ Bulk import ] ┤
+│ [Profile URL / @handle ...............................]  [Tags: ai, founder]  [ Add ]        │
 │ ─────────────────────────────────────────────────────────────────────────────────────────  │
-│  (av) Luna Chen        in/luna-chen     [linkedin-growth][lead-magnets] edit   Demote  Remove│
-│  (av) Aakash Gupta     in/aagupta       — edit                                 Demote  Remove│
+│  (av) Luna Chen        in/luna-chen     [linkedin-growth][lead-magnets]                Remove │
+│  (av) Aakash Gupta     in/aagupta       —                                              Remove │
 │  …                                                                                          │
-├─ Watch List   68 creators — not auto-scraped                                            ▾ ──┤
 ├─ Keywords   (per market — used to prefill scrapes)                                          ┤
 │  AI            [artificial intelligence ✕][llm ✕][ai ✕][agent ✕]…  + Add keyword   Remove market │
 │  LINKEDIN      [claude code content creation ✕][claude code marketing ✕]  + Add keyword          │
@@ -865,7 +864,7 @@ also shows its group-size indicator.
 │  + Add market                                                                               │
 ├─ Manual Scrape ──────────────────────────────────────────────  Last run: 6/19 1:38 PM ─────┤
 │  Source [Creators + Keywords ▾]  Platform [All ▾]  Time frame [Last week ▾]  Market [All ▾]  │
-│  [ Run scrape now ]     48 core creators + 19 keywords · 1 week                              │
+│  [ Run scrape now ]     48 creators + 19 keywords · 1 week                                   │
 ├─ Scrape History   (last 20 runs) ───────────────────────────────────────────────────────────┤
 │  Date             Source    Platform  Keywords                    Fetched   New              │
 │  Jun 19 01:38 PM  Keywords   LinkedIn  solution engineer, …        385       385             │
@@ -874,15 +873,15 @@ also shows its group-size indicator.
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Mapping: **API keys** → §11.4 (`SettingsPanel`). **Core/Watch creators** → §11.2 (`tier` = `core`/
-`watch`; **Demote** = explicit `core→watch`, allowed because it's explicit, unlike a silent downgrade;
-**Bulk import** = paste many, one per line). **Manual Scrape** → §11.3 `POST /api/scrape`; the summary
-line reflects the resolved run (`{coreCount} core creators + {keywordCount} keywords · {timeframe}`).
+Mapping: **API keys** → §11.4 (`SettingsPanel`). **Creators** → §11.2 (one list; every creator is part
+of the scrape set; **Bulk import** = paste many, one per line; **Remove** deletes). **Manual Scrape** →
+§11.3 `POST /api/scrape`; the summary line reflects the resolved run (`{creatorCount} creators +
+{keywordCount} keywords · {timeframe}`).
 
-> **No scheduler (unchanged, N3/local rule):** there is **no cron/auto-scrape**. Core creators are
-> labelled *"pulled every scrape"* (they're the default creator set for a manual run) and the Watch
-> List is *"not auto-scraped"* — both describe manual-run behaviour, not a schedule. The original
-> app's "scraped weekly" wording is intentionally dropped.
+> **No scheduler, one creator list (N3/local rule):** there is **no cron/auto-scrape** — every scrape
+> is manual (§11.5 Manual Scrape). Creators are a **single list**; all of them are pulled on a
+> creator/both run. There is no "watch/core" split or "auto-scraped / scraped weekly" wording — it
+> would imply a schedule (and a tier) that don't exist in the UI.
 
 ## 11.6 Greenlit additions (build after the core UI restyle)
 
@@ -1088,8 +1087,8 @@ Order within the layer (each independent, can be parallelized):
 28. **`DashboardFilterBar`** — single search row (Screen A): keywords chips, creator dropdown (count),
     ♥ minLikes / ↗ minShares / ✕ minXFactor, sort, **timeframe select + custom range**, market select,
     platform pill, **Search**. Group-by-image / Discover-trends live in the header (step 30).
-29. **`CreatorManager`** — Core / Watch lists with tier, add (single/**bulk import**), **Demote**
-    (core→watch, explicit), Remove.
+29. **`CreatorManager`** — a single creator list (all part of the scrape set), add (single/**bulk
+    import**), Remove.
 30. **`DashboardClient`** (Search screen) — header ("Search Posts", "Showing N of M", grid/list
     toggle, Group-by-image / Discover-trends buttons); fetch `/api/posts`; render grid vs
     group/cluster views. **`ManualScrape`** is a separate component (on Scrape Settings, step 31):
@@ -1166,9 +1165,9 @@ secret keys start empty and are filled in by the user during onboarding.
    **Search** tab is disabled. After pasting a user's own Apify + Voyage keys (and optionally
    Anthropic) and passing the per-provider connection tests, Search unlocks. **No key was bundled.**
 4. Two screens reachable from the top nav — **Search** (`DashboardClient`) and **Scrape Settings**
-   (`ScrapeSettings`: keys + Core/Watch creators + Manual Scrape); the §11.7 design system is applied
+   (`ScrapeSettings`: keys + creators + keywords + Manual Scrape); the §11.7 design system is applied
    (global `app/globals.css`).
-5. Add a LinkedIn creator and a Twitter creator via the UI; both persist. Demote a core creator.
+5. Add a LinkedIn creator and a Twitter creator via the UI; both persist and appear in the list.
 6. On **Scrape Settings**, **Run scrape now** → progress pill → new posts appear on **Search**; a
    second identical scrape inserts **0** new posts (dedup proven).
 7. Posts show correct platform + scrape-source badges; x-factor badges appear for authors with
