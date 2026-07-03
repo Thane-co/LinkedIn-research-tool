@@ -19,7 +19,7 @@ import type { PostMedia, PostRow, SortMode, Timeframe } from '@/lib/types'
 export const dynamic = 'force-dynamic'
 
 const PLATFORMS = ['all', 'linkedin', 'twitter'] as const
-const TIMEFRAMES: readonly Timeframe[] = ['24h', '3d', 'week', 'month', '3months', 'custom']
+const TIMEFRAMES: readonly Timeframe[] = ['all', '24h', '3d', 'week', 'month', '3months', 'custom']
 const SORTS: readonly SortMode[] = ['recent', 'likes', 'xfactor']
 
 /** Return `raw` only if it's one of `allowed`, else undefined — so an unknown enum param is ignored,

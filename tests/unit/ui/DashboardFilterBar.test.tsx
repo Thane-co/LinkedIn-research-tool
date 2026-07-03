@@ -33,14 +33,14 @@ describe('DashboardFilterBar', () => {
   it('selects a creator via the dropdown checkbox', async () => {
     const onChange = vi.fn()
     render(<DashboardFilterBar filters={baseFilters()} availableAuthors={authors} onChange={onChange} />)
-    await userEvent.click(screen.getByLabelText('Jane'))
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Jane' }))
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ authors: ['jane'] }))
   })
 
-  it('clears creators with None', async () => {
+  it('clears creators with Show all', async () => {
     const onChange = vi.fn()
     render(<DashboardFilterBar filters={baseFilters({ authors: ['jane'] })} availableAuthors={authors} onChange={onChange} />)
-    await userEvent.click(screen.getByRole('button', { name: /^none$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /show all/i }))
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ authors: [] }))
   })
 

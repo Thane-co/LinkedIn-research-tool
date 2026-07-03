@@ -3,7 +3,7 @@
 // count, Group-by-image / Discover-trends buttons), the search filter row, and the results (post
 // grid vs image-group / content-cluster views). Scraping lives on Scrape Settings.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { DashboardFilterBar, type AuthorOption, type Filters } from '@/app/DashboardFilterBar'
 import { PostCard, type PostCardPost } from '@/app/PostCard'
 import { apiFetch } from '@/lib/api-client'
@@ -38,7 +38,7 @@ export const DEFAULT_FILTERS: Filters = {
   minLikes: 0,
   minShares: 0,
   minXFactor: 0,
-  timeframe: 'week',
+  timeframe: 'all', // landing view: latest posts across every creator, no date filter
   market: '',
   sort: 'recent',
   groupByImage: false,
@@ -107,19 +107,48 @@ export function DashboardClient() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
   const [data, setData] = useState<PostsResponse>({ posts: [], total: 0, availableAuthors: [], hasMore: false })
   const [error, setError] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const [loading, setLoading] = useState(false)
 
-  const load = useCallback(async (): Promise<void> => {
-    try {
-      setError(null)
-      setData(await apiFetch<PostsResponse>(`/api/posts?${toQuery(filters)}`))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load posts')
-    }
-  }, [filters])
+  // Load a page. Page 1 replaces the results; later pages append (Load more). Filters go in the query
+  // string, but the author include-list stays small (empty = all), so the URL never overflows.
+  const load = useCallback(
+    async (pageToLoad: number): Promise<void> => {
+      try {
+        setError(null)
+        setLoading(true)
+        const res = await apiFetch<PostsResponse>(`/api/posts?${toQuery(filters)}&page=${pageToLoad}`)
+        setData((prev) => (pageToLoad > 1 ? { ...res, posts: [...prev.posts, ...res.posts] } : res))
+        setPage(pageToLoad)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load posts')
+      } finally {
+        setLoading(false)
+      }
+    },
+    [filters],
+  )
 
+  // Any filter change resets to the first page.
   useEffect(() => {
-    void load()
+    void load(1)
   }, [load])
+
+  // Infinite scroll: auto-load the next page when the sentinel nears the viewport. We only observe
+  // while there's more to load and no request is in flight, so pages never double-fire.
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el || !data.hasMore || loading) return
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) void load(page + 1)
+      },
+      { rootMargin: '600px' },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [data.hasMore, loading, page, load])
 
   const total = data.total ?? data.posts.length
   const postById = new Map(data.posts.map((p) => [p.id, p]))
@@ -177,7 +206,7 @@ export function DashboardClient() {
         </div>
       </header>
 
-      <DashboardFilterBar filters={filters} availableAuthors={data.availableAuthors} onChange={setFilters} onSearch={load} />
+      <DashboardFilterBar filters={filters} availableAuthors={data.availableAuthors} onChange={setFilters} onSearch={() => void load(1)} />
 
       {error && (
         <p className="dashboard__error" role="alert">
@@ -225,11 +254,23 @@ export function DashboardClient() {
           </div>
         )
       ) : (
-        <div className="dashboard__results dashboard__results--grid">
-          {data.posts.map((p) => (
-            <PostCard key={p.id} post={p} />
-          ))}
-        </div>
+        <>
+          <div className="dashboard__results dashboard__results--grid">
+            {data.posts.map((p) => (
+              <PostCard key={p.id} post={p} />
+            ))}
+          </div>
+          {data.hasMore && (
+            <>
+              <div ref={sentinelRef} aria-hidden="true" className="dashboard__sentinel" />
+              <div className="dashboard__loadmore">
+                <button type="button" disabled={loading} onClick={() => void load(page + 1)}>
+                  {loading ? 'Loading…' : `Load more (${data.posts.length} of ${total})`}
+                </button>
+              </div>
+            </>
+          )}
+        </>
       )}
     </div>
   )

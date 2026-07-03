@@ -71,6 +71,18 @@ text + image embeddings · x-factor compute & filter · image grouping · conten
 ("discover trends") · platform / time-horizon / engagement / keyword / creator filters ·
 creator add/remove UI · manual scrape button with progress.
 
+### 2.4 Scale & data provenance
+The read / filter / render layer must stay **correct and responsive for datasets on the order of
+10⁵ posts and 10³ distinct authors**, whether that data is **accumulated by scraping or bulk-imported**
+from an existing store. Two consequences the rest of this PRD depends on:
+- **"Creators you follow" ≠ "distinct post authors."** The `creators` table is a curated set of
+  hundreds; keyword scraping surfaces **thousands** of one-off authors. Any surface that lists or
+  filters by author must treat these as different sets (see §11.1 `availableAuthors` / `isCore`).
+- **No unbounded work per request.** Nothing may enumerate the full author set into a URL, render
+  every author at once, or return every post in one page (see §11.1 `authors`, §11.5 pagination).
+  **Partial enrichment is normal** — an import may carry far fewer embeddings than posts, so
+  embedding-dependent views must degrade gracefully, not break.
+
 ---
 
 ## 3. Tech stack & rationale
@@ -771,10 +783,10 @@ Query params:
 ```
 platform=linkedin|twitter|all           (default all)
 keywords=comma,separated                 (matched against content, case-insensitive LIKE)
-authors=comma,separated author_ids       (include filter)
+authors=comma,separated author_ids       (include filter; EMPTY = all creators, no filter)
 minLikes=int  minShares=int              (engagement floors; default 0)
 minXFactor=float                          (x_factor >= value; null x_factor excluded)
-timeframe=24h|3d|week|month|3months|custom
+timeframe=all|24h|3d|week|month|3months|custom   (default all; see landing view below)
 dateFrom=ISO  dateTo=ISO                  (when timeframe=custom)
 market=string                             (posts.market bucket; §11.6, §6.5)
 sort=recent|likes|xfactor                 (default recent)
@@ -789,6 +801,11 @@ Behavior:
   Response: `{ posts, total, page, pageSize, hasMore, availableAuthors }`, where `hasMore` is exact
   (`offset + posts.length < total`). `posts` are serialized **without** the `embedding`,
   `image_embedding`, and `raw_data` columns (never ship BLOBs/vectors over the wire).
+- **Author filtering** (§2.4): an empty `authors` set means **all creators** (no `WHERE` on
+  `author_id`). Callers **must never enumerate the full author list** into `authors` — at 10³ authors
+  that overflows the request URL (**HTTP 431**); "select all" therefore **clears** the filter rather
+  than listing every id. Include-lists are small, hand-picked subsets. If a large explicit set is ever
+  required, move filters to a `POST` body — never the query string.
 - **Grouping mode** (`groupByImage` or `discoverTrends` true): load up to **400** filtered posts
   that carry the required embeddings, run §9 clustering in JS, and return `{ posts, hasMore:false,
   availableAuthors }` plus **`imageGroups`** (for `groupByImage`) or **`contentClusters`** (for
@@ -798,13 +815,19 @@ Behavior:
   `groupByImage` takes precedence if both flags are set. `imageThreshold`/`textThreshold` override the §9.2 defaults.
   Each group/cluster carries a `similarity` score (§9.3/§9.4); an empty `imageGroups`/`contentClusters`
   array means nothing met the threshold (the UI shows an empty-state, not a blank page).
-- `availableAuthors` (always present) is the distinct `author_id`+`author_name`+`avatar` set for the
-  creator-filter dropdown. It honors the active filters **except** the `authors` include-list (so
-  selecting authors never shrinks the dropdown). The `posts` table has **no avatar column**, so
-  `avatar` is sourced from `creators.avatar_url` by matching on `author_id` (null when the author
-  isn't a tracked creator).
+- `availableAuthors` (always present) is the distinct `author_id`+`author_name`+`avatar`+`isCore` set
+  for the creator-filter dropdown. It honors the active filters **except** the `authors` include-list
+  (so selecting authors never shrinks the dropdown). The `posts` table has **no avatar column**, so
+  `avatar` is sourced from `creators.avatar_url` by matching on `author_id` (null when the author isn't
+  a tracked creator). **`isCore`** is true when the `author_id` exists in `creators` (a creator you
+  follow) vs. a keyword-surfaced one-off author (§2.4). This set may hold **thousands** of authors, so
+  the UI **must not** render them all at once or enumerate them into a request (§11.5).
 
 Timeframe → `posted_at >= now - N`: `24h`=1d, `3d`=3d, `week`=7d, `month`=30d, `3months`=90d.
+`all` applies **no date restriction** (the default; whole corpus).
+
+**Default landing view** (no params): `timeframe=all`, `authors` empty (all creators), `sort=recent`,
+engagement floors `0` — the newest posts across everything, unfiltered. The user narrows from there.
 
 ### 11.2 `GET/POST/DELETE /api/creators`
 Platform detection / url normalization / `author_id` derivation happen **at the route layer** via
@@ -858,9 +881,9 @@ Two screens: **Search** (the default dashboard) and **Scrape Settings** (creator
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────┐
 │ Search Posts                              [▦ grid][≣ list]  [ Group by image ] [ Discover trends ] │
-│ Showing 20 of 24 matching posts                                                             │
+│ Showing 50 of 12,480 matching posts                                                         │
 ├──────────────────────────────────────────────────────────────────────────────────────────┤
-│ [Keywords… ] [Creators (516) ▾] [♥ 750] [↗ 0] [✕ 0] [Newest ▾] [Last week ▾] [Framework ▾] │
+│ [Keywords… ] [Creators (All) ▾] [♥ 0] [↗ 0] [✕ 0] [Newest ▾] [All time ▾] [Framework ▾]     │
 │                                                              [LinkedIn ✕] [   Search   ]      │
 ├──────────────────────────────────────────────────────────────────────────────────────────┤
 │ ┌─ card ───────────────┐  ┌─ card ───────────────┐  ┌─ card ───────────────┐               │
@@ -887,15 +910,30 @@ Filter row → `/api/posts` params (§11.1):
 | Control | Param |
 |---|---|
 | Keywords… (chips) | `keywords` |
-| Creators (N) ▾ (multi-select, count = # selected/available) | `authors` |
+| Creators (N) ▾ (empty = **All**; searchable + capped list; **Show all** / **Core creators (N)** quick-selects; avatars w/ initial fallback) | `authors` |
 | ♥ number | `minLikes` |
 | ↗ number | `minShares` |
 | ✕ number | `minXFactor` |
 | Newest ▾ (Newest / Most liked / Highest x-factor) | `sort` |
-| Last week ▾ (24h/3d/week/month/3months/custom) | `timeframe` (+ `dateFrom`/`dateTo`) |
+| All time ▾ (all/24h/3d/week/month/3months/custom) | `timeframe` (+ `dateFrom`/`dateTo`) |
 | Framework ▾ (market) | `market` *(§11.6)* |
 | LinkedIn ✕ (platform pill; ✕ clears to All) | `platform` |
 | Search | re-fetch |
+
+**Behaviors at scale (§2.4):**
+- **Default landing view:** all creators, **All time**, Newest, no engagement floors — the newest posts
+  across everything, unfiltered. The user narrows from there.
+- **Results pagination:** the grid loads one page (default 50) and **auto-loads the next as the user
+  nears the bottom** (infinite scroll), with a **"Load more"** button as fallback. `total` can be tens
+  of thousands, so there is never an all-at-once render.
+- **Creators dropdown:** empty selection = All. A **filter box** narrows the list and rendering is
+  **capped** (the author set can be thousands). Two quick-selects: **Show all** (clears the filter) and
+  **Core creators (N)** (selects only `isCore` authors, §11.1). Each row shows an avatar, falling back
+  to a **colored initial** when the image is missing or expired (imported profile-photo URLs expire).
+- **Numeric filters (♥/↗/✕):** render **empty with a `0` placeholder** (never a stuck literal `0`); ✕
+  (min x-factor) accepts decimals.
+- **Filter-bar layout:** a **responsive grid** — controls flow into aligned columns and wrap into tidy
+  rows; **Search** is a right-aligned trailing action, not a control that shares the wrap.
 
 Post card header: avatar + author + **posted date** on the left; a **🔗 link to the original post**
 (opens in a new tab) and the **platform** badge on the right. Body: content with **…see more** expand;

@@ -18,6 +18,7 @@ const ITEMS_TIMEOUT_MS = 60_000
 
 // Timeframe -> actor-specific bounds (PRD §10.2). Values chosen to bound each scrape sensibly.
 const POSTED_LIMIT: Record<Timeframe, string> = {
+  all: 'any',
   '24h': 'past-24h',
   '3d': 'past-week',
   week: 'past-week',
@@ -26,6 +27,7 @@ const POSTED_LIMIT: Record<Timeframe, string> = {
   custom: 'any',
 }
 const MAX_POSTS_PER_PROFILE: Record<Timeframe, number> = {
+  all: 100,
   '24h': 10,
   '3d': 20,
   week: 30,

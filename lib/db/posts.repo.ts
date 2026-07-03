@@ -112,7 +112,8 @@ function buildWhere(filters: PostFilters): { clause: string; params: unknown[] }
       conditions.push('posted_at <= ?')
       params.push(filters.dateTo)
     }
-  } else if (filters.timeframe) {
+  } else if (filters.timeframe && filters.timeframe !== 'all') {
+    // 'all' = no date restriction (the default landing view: latest posts across all time).
     const days = TIMEFRAME_DAYS[filters.timeframe]
     conditions.push('posted_at >= ?')
     params.push(new Date(Date.now() - days * DAY_MS).toISOString())
@@ -197,6 +198,7 @@ export interface AvailableAuthor {
   author_id: string
   author_name: string | null
   avatar: string | null
+  isCore: boolean // present in the `creators` table = a creator you follow/scrape
 }
 
 /**
@@ -224,6 +226,7 @@ export function getAvailableAuthors(filters: PostFilters): AvailableAuthor[] {
     author_id: r.author_id,
     author_name: r.author_name,
     avatar: avatars.get(r.author_id) ?? null,
+    isCore: avatars.has(r.author_id),
   }))
 }
 

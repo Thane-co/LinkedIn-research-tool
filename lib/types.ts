@@ -7,7 +7,7 @@ export type ScrapeMode = 'keyword' | 'creator' | 'both'
 export type JobStatus = 'running' | 'succeeded' | 'failed'
 export type CreatorTier = 'core' | 'watch'
 export type AuthorType = 'profile' | 'company' | 'verified'
-export type Timeframe = '24h' | '3d' | 'week' | 'month' | '3months' | 'custom'
+export type Timeframe = 'all' | '24h' | '3d' | 'week' | 'month' | '3months' | 'custom'
 export type SortMode = 'recent' | 'likes' | 'xfactor'
 
 // --- posts row (PRD §6.1) --------------------------------------------------

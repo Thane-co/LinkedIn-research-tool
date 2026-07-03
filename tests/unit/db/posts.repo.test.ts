@@ -224,8 +224,8 @@ describe('clustering candidates + author history', () => {
 
     const authors = getAvailableAuthors({})
     expect(authors).toEqual([
-      { author_id: 'jane', author_name: 'Jane', avatar: 'https://img/jane.png' },
-      { author_id: 'joe', author_name: 'Joe', avatar: null },
+      { author_id: 'jane', author_name: 'Jane', avatar: 'https://img/jane.png', isCore: true },
+      { author_id: 'joe', author_name: 'Joe', avatar: null, isCore: false },
     ])
   })
 

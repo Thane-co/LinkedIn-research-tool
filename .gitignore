@@ -20,6 +20,9 @@ research.db
 .env.local
 .env*.local
 
+# local media cache — downloaded post images (large, user-local data, not source)
+/public/post-images/
+
 # test / coverage
 /coverage
 
