@@ -17,11 +17,11 @@ governed by their own separate terms, not by this License.
 
 1. GRANT OF LICENSE
    Subject to your continued compliance with this License, the Licensor grants
-   you — and only you, the individual to whom the Licensor directly provided a
-   copy of the Software — a personal, non-exclusive, non-transferable,
-   non-sublicensable, revocable license to install and run the Software on
-   devices that you own or personally control, solely for your own personal,
-   non-commercial use.
+   you — any person who lawfully obtains a copy of the Software — a personal,
+   non-exclusive, non-transferable, non-sublicensable, revocable license to
+   access, view, install, and run the Software on devices that you own or
+   personally control, solely for your own personal, non-commercial learning,
+   evaluation, and reference use.
 
 2. RESTRICTIONS
    You may NOT, in whole or in part, directly or indirectly:
@@ -36,11 +36,13 @@ governed by their own separate terms, not by this License.
        distribute or make them available to anyone else;
    (e) remove, obscure, or alter any copyright, license, or proprietary notice.
 
-3. INVITATION ONLY
-   Rights under this License extend only to a person who received the Software
-   directly from the Licensor. Any person who obtains the Software by any other
-   means acquires no rights, is not licensed to use it, and must delete all
-   copies immediately.
+3. SOURCE-AVAILABLE, NOT OPEN SOURCE
+   The Licensor makes the Software's source code publicly viewable (e.g. in a
+   public code repository) for reference, learning, and evaluation. This does NOT
+   make the Software open source and does NOT place it in the public domain.
+   Public availability grants no rights beyond those expressly stated in this
+   License; all rights not expressly granted are reserved by the Licensor. Access
+   through a hosting platform is additionally subject to that platform's terms.
 
 4. COMMERCIAL USE, SHARING, AND REDISTRIBUTION
    Any commercial use of the Software, and any wish to share, redistribute, or

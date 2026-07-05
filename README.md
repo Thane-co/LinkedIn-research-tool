@@ -6,8 +6,8 @@ with **embeddings** + an **x-factor** score, and shows them in a filterable UI w
 grouping and content clustering. Nothing leaves your machine except calls to Apify + Voyage (and,
 optionally, Anthropic) — all made with **your own** API keys.
 
-> **License:** This is proprietary, invitation-only software — see [Licensing](#licensing) below.
-> It is not open source. Please don't share it with anyone else without a license.
+> **License:** This is proprietary, **source-available** software — see [Licensing](#licensing) below.
+> It is not open source. Personal, non-commercial use only; don't redistribute it or use it commercially without a license.
 
 ---
 
@@ -90,9 +90,10 @@ project folder (git-ignored; it holds your keys + scraped data — don't share i
 
 ## Licensing
 
-© 2026 Basia Kubicka (Thane & CO, LLC). All rights reserved. This software is **proprietary and invitation-only**,
-and is provided as a **free, optional educational/reference bonus** (a reference implementation to learn
-from) — it is not sold as a product. See the [LICENSE](LICENSE) file for the full terms. In short:
+© 2026 Basia Kubicka (Thane & CO, LLC). All rights reserved. This software is **proprietary and source-available**
+(publicly viewable, but **not** open source) and is provided as a **free, optional educational/reference bonus**
+(a reference implementation to learn from) — it is not sold as a product. See the [LICENSE](LICENSE) file for the
+full terms. In short:
 
 - You may **install and use it personally**, on your own devices, for non-commercial purposes.
 - You may **not** share, redistribute, resell, publish, or give it to anyone else.
