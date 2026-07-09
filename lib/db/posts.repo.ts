@@ -3,10 +3,13 @@
 import { CANDIDATE_CAP, TIMEFRAME_DAYS } from '@/lib/config'
 import { getDb } from '@/lib/db/db'
 import { blobToVector } from '@/lib/pure/vector-blob'
-import type { PostRow, SortMode, Timeframe } from '@/lib/types'
+import type { Platform, PostRow, SortMode, Timeframe } from '@/lib/types'
 
 export interface PostFilters {
-  platform?: 'linkedin' | 'twitter' | 'all'
+  platform?: Platform | 'all'
+  // §17.4: a subset of platforms, e.g. ['substack','linkedin']. Takes precedence over `platform`;
+  // an empty/absent list applies no platform filter (= all).
+  platforms?: Platform[]
   keywords?: string[]
   authors?: string[]
   minLikes?: number
@@ -74,7 +77,11 @@ function buildWhere(filters: PostFilters): { clause: string; params: unknown[] }
   const conditions: string[] = []
   const params: unknown[] = []
 
-  if (filters.platform && filters.platform !== 'all') {
+  if (filters.platforms && filters.platforms.length > 0) {
+    // §17.4 multi-platform subset: platform IN (…). Empty list = no filter (handled by the guard).
+    conditions.push(`platform IN (${filters.platforms.map(() => '?').join(',')})`)
+    params.push(...filters.platforms)
+  } else if (filters.platform && filters.platform !== 'all') {
     conditions.push('platform = ?')
     params.push(filters.platform)
   }
@@ -197,14 +204,29 @@ export function getAuthorHistory(authorId: string): PostRow[] {
 export interface AvailableAuthor {
   author_id: string
   author_name: string | null
+  platform: Platform // which platform this account posts on (drives the dropdown's platform badge)
   avatar: string | null
   isCore: boolean // present in the `creators` table = a creator you follow/scrape
+  persona: string | null // §17.3: the person this account belongs to (null for non-creators)
+}
+
+/** How "human display name"-like a name variant is, most-preferred first: a real name has a space or
+ *  a capital (a bare handle like "aliciateltz" has neither); ties break on post count, then length. */
+function nameScore(name: string | null, cnt: number): [number, number, number] {
+  const looksHuman = name && (/\s/.test(name) || /[A-Z]/.test(name)) ? 1 : 0
+  return [looksHuman, cnt, name?.length ?? 0]
+}
+
+function scoreIsBetter(a: [number, number, number], b: [number, number, number]): boolean {
+  return a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] > b[2]
 }
 
 /**
  * Distinct authors for the creator-filter dropdown (PRD §11.1). Applies the current filters EXCEPT
- * the author include-list (so selecting authors doesn't shrink the dropdown). The avatar is sourced
- * from the creators table (posts carry no avatar column) by matching on author_id.
+ * the author include-list (so selecting authors doesn't shrink the dropdown). One row per ACCOUNT
+ * (author_id): the same account often accrues posts under both its real name and its bare handle, so
+ * we collapse those variants to the most human-looking name (§17.3). Avatar + persona come from the
+ * creators table (posts carry neither) by matching author_id.
  */
 export function getAvailableAuthors(filters: PostFilters): AvailableAuthor[] {
   const db = getDb()
@@ -212,22 +234,47 @@ export function getAvailableAuthors(filters: PostFilters): AvailableAuthor[] {
   const where = clause ? `${clause} AND author_id IS NOT NULL` : 'WHERE author_id IS NOT NULL'
 
   const rows = db
-    .prepare(`SELECT DISTINCT author_id, author_name FROM posts ${where} ORDER BY author_name`)
-    .all(...params) as { author_id: string; author_name: string | null }[]
+    .prepare(
+      `SELECT author_id, author_name, platform, COUNT(*) AS cnt
+       FROM posts ${where}
+       GROUP BY author_id, author_name, platform`,
+    )
+    .all(...params) as { author_id: string; author_name: string | null; platform: Platform; cnt: number }[]
 
-  const avatars = new Map<string, string | null>()
-  for (const c of db
-    .prepare('SELECT author_id, avatar_url FROM creators WHERE author_id IS NOT NULL')
-    .all() as { author_id: string; avatar_url: string | null }[]) {
-    avatars.set(c.author_id, c.avatar_url)
+  // Collapse name variants to one entry per account, keeping the best-scoring display name.
+  const byAuthor = new Map<
+    string,
+    { author_name: string | null; platform: Platform; score: [number, number, number] }
+  >()
+  for (const r of rows) {
+    const score = nameScore(r.author_name, r.cnt)
+    const prev = byAuthor.get(r.author_id)
+    if (!prev || scoreIsBetter(score, prev.score)) {
+      byAuthor.set(r.author_id, { author_name: r.author_name, platform: r.platform, score })
+    }
   }
 
-  return rows.map((r) => ({
-    author_id: r.author_id,
-    author_name: r.author_name,
-    avatar: avatars.get(r.author_id) ?? null,
-    isCore: avatars.has(r.author_id),
-  }))
+  // Source avatar + persona from the creators table (posts carry neither) by matching author_id.
+  const creatorInfo = new Map<string, { avatar: string | null; persona: string | null }>()
+  for (const c of db
+    .prepare('SELECT author_id, avatar_url, persona FROM creators WHERE author_id IS NOT NULL')
+    .all() as { author_id: string; avatar_url: string | null; persona: string | null }[]) {
+    creatorInfo.set(c.author_id, { avatar: c.avatar_url, persona: c.persona })
+  }
+
+  return [...byAuthor.entries()]
+    .map(([author_id, v]) => {
+      const info = creatorInfo.get(author_id)
+      return {
+        author_id,
+        author_name: v.author_name,
+        platform: v.platform,
+        avatar: info?.avatar ?? null,
+        isCore: info !== undefined, // present in creators = a creator you follow (§11.1)
+        persona: info?.persona ?? null,
+      }
+    })
+    .sort((a, b) => (a.author_name ?? a.author_id).localeCompare(b.author_name ?? b.author_id))
 }
 
 export function updateXFactor(

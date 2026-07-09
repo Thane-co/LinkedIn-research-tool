@@ -40,6 +40,18 @@ describe('GET /api/posts — paginated mode', () => {
     expect(body.posts.map((p: { id: string }) => p.id)).toContain('a')
   })
 
+  it('filters by a platform subset (§17.4): platform=substack,linkedin', async () => {
+    seed([
+      { id: 'l', platform: 'linkedin' },
+      { id: 't', platform: 'twitter' },
+      { id: 's', platform: 'substack' },
+    ])
+    const body = await (await get('?platform=substack,linkedin')).json()
+    expect(body.posts.map((p: { id: string }) => p.id).sort()).toEqual(['l', 's'])
+    // availableAuthors always carries the persona field (null for non-creators)
+    expect(body.availableAuthors.every((a: { persona?: unknown }) => 'persona' in a)).toBe(true)
+  })
+
   it('applies filters and never serializes raw blobs/raw_data', async () => {
     seed([
       { id: 'a', platform: 'linkedin', content: 'ai agents', likes: 100, embedding: vectorToBlob([1, 0, 0, 0]) },

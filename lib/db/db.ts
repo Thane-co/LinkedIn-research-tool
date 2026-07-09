@@ -32,6 +32,7 @@ export function seedSettingsDefaults(db: Database.Database): void {
 // EXISTS` never alters an existing table, so new nullable columns are added here idempotently.
 const ADDITIVE_COLUMNS: { table: string; column: string; type: string }[] = [
   { table: 'posts', column: 'media', type: 'TEXT' }, // §10.3.1 post media
+  { table: 'creators', column: 'persona', type: 'TEXT' }, // §17.2 cross-platform persona key
 ]
 
 /** Run the schema DDL idempotently against the given (or singleton) connection, then seed defaults. */
@@ -45,6 +46,9 @@ export function migrate(db?: Database.Database): void {
       // column already exists — the fresh schema created it, or a prior migrate added it
     }
   }
+  // Indexes on additive columns run here (not in schema.sql) so the column is guaranteed to exist on
+  // a legacy db that predates it (§17.2 persona).
+  target.exec('CREATE INDEX IF NOT EXISTS creators_persona_idx ON creators(persona)')
   seedSettingsDefaults(target)
 }
 

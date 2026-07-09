@@ -62,6 +62,16 @@ describe('POST /api/scrape', () => {
     expect(mockRunScrape).toHaveBeenCalledTimes(1)
     expect(mockRunScrape.mock.calls[0]![0]).toMatchObject({ jobId })
   })
+
+  it('does not record keywords on a creators-only job (history shows none)', async () => {
+    setSettings({ apify_api_token: 'tok', voyage_api_key: 'vk' })
+    const res = await POST(
+      postScrape({ platforms: ['substack'], mode: 'creator', keywords: ['ai', 'llm'], timeframe: 'all' }),
+    )
+    const { jobId } = await res.json()
+    const params = JSON.parse(getJob(jobId)!.params ?? '{}') as { keywords: string[] }
+    expect(params.keywords).toEqual([]) // dropped for a creator run even though the body sent some
+  })
 })
 
 describe('GET /api/scrape/[id]', () => {

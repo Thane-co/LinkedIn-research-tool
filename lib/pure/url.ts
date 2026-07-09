@@ -39,6 +39,42 @@ export function extractLinkedInSlug(url: string): string | null {
   return match ? match[1]! : null
 }
 
+const SUBSTACK_SUB_RE = /^([a-z0-9-]+)\.substack\.com$/i
+// Substack system subdomains that are not a publication handle.
+const SUBSTACK_RESERVED = new Set(['www', 'open'])
+
+/**
+ * Extract a clean Substack publication handle from a substack.com url, or null (§17). Handles two
+ * forms: `https://<pub>.substack.com/...` → `<pub>`, and `https://substack.com/@<handle>` → `<handle>`.
+ * Substack is URL-driven: a bare handle or a custom domain returns null (a bare word stays a Twitter
+ * handle; a custom-domain publication must be added by its .substack.com url).
+ */
+export function extractSubstackHandle(input: string): string | null {
+  if (!input) return null
+  const trimmed = input.trim()
+  if (!/substack\.com/i.test(trimmed)) return null
+
+  let host: string
+  let pathname: string
+  try {
+    const u = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`)
+    host = u.hostname.toLowerCase()
+    pathname = u.pathname
+  } catch {
+    return null
+  }
+
+  if (host === 'substack.com' || host === 'www.substack.com') {
+    const m = pathname.match(/^\/@([A-Za-z0-9_-]+)/)
+    return m ? m[1]! : null
+  }
+
+  const m = host.match(SUBSTACK_SUB_RE)
+  if (!m) return null
+  const sub = m[1]!.toLowerCase()
+  return SUBSTACK_RESERVED.has(sub) ? null : sub
+}
+
 /** Extract a clean Twitter/X handle (no @) from a url or @handle input, or null. */
 export function extractTwitterHandle(input: string): string | null {
   if (!input) return null

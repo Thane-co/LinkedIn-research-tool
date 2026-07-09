@@ -20,28 +20,35 @@ interface KeywordGroup {
   terms: { term: string }[]
 }
 
-const TIMEFRAMES: Timeframe[] = ['24h', '3d', 'week', 'month', '3months']
+const TIMEFRAMES: Timeframe[] = ['24h', '3d', 'week', 'month', '3months', 'all']
+const TIMEFRAME_LABELS: Partial<Record<Timeframe, string>> = { all: 'All time (full history)' }
 
 export function ManualScrape({ pollIntervalMs = 1500 }: { pollIntervalMs?: number }) {
-  const [coreCount, setCoreCount] = useState(0)
+  const [creators, setCreators] = useState<{ platform: string }[]>([])
   const [groups, setGroups] = useState<KeywordGroup[]>([])
   const [source, setSource] = useState<Source>('both')
-  const [platform, setPlatform] = useState<'all' | 'linkedin' | 'twitter'>('all')
+  const [platform, setPlatform] = useState<'all' | 'linkedin' | 'twitter' | 'substack'>('all')
   const [timeframe, setTimeframe] = useState<Timeframe>('week')
   const [market, setMarket] = useState('') // '' = all markets
+  const [includeNotes, setIncludeNotes] = useState(false) // Substack Notes are opt-in (slower)
   const [pill, setPill] = useState<Pill>({ status: 'idle' })
   const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
     const onFail = (e: unknown): void => setLoadError(e instanceof Error ? e.message : 'Failed to load')
-    apiFetch<{ creators: unknown[] }>('/api/creators')
-      .then((b) => setCoreCount(b.creators.length))
+    apiFetch<{ creators: { platform: string }[] }>('/api/creators')
+      .then((b) => setCreators(b.creators))
       .catch(onFail)
     apiFetch<{ groups: KeywordGroup[] }>('/api/keywords')
       .then((b) => setGroups(b.groups))
       .catch(onFail)
   }, [])
 
+  // Keywords only apply when the source uses them; creators-only runs ignore them entirely (§11.6).
+  const usesKeywords = source !== 'creator'
+  const usesCreators = source !== 'keyword'
+  // Count only the creators the run will actually pull: all platforms, or just the selected one.
+  const creatorCount = platform === 'all' ? creators.length : creators.filter((c) => c.platform === platform).length
   const keywords = (market ? groups.filter((g) => g.market === market) : groups).flatMap((g) =>
     g.terms.map((t) => t.term),
   )
@@ -64,12 +71,19 @@ export function ManualScrape({ pollIntervalMs = 1500 }: { pollIntervalMs?: numbe
 
   async function run(): Promise<void> {
     setPill({ status: 'running' })
-    const platforms = platform === 'all' ? ['linkedin', 'twitter'] : [platform]
+    const platforms = platform === 'all' ? ['linkedin', 'twitter', 'substack'] : [platform]
     try {
       const { jobId } = await apiFetch<{ jobId: string }>('/api/scrape', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mode: source as ScrapeMode, platforms, timeframe, market: market || undefined, keywords }),
+        body: JSON.stringify({
+          mode: source as ScrapeMode,
+          platforms,
+          timeframe,
+          market: market || undefined,
+          keywords: usesKeywords ? keywords : [],
+          includeNotes,
+        }),
       })
       await poll(jobId)
     } catch (e) {
@@ -106,6 +120,7 @@ export function ManualScrape({ pollIntervalMs = 1500 }: { pollIntervalMs?: numbe
             <option value="all">All platforms</option>
             <option value="linkedin">LinkedIn</option>
             <option value="twitter">Twitter</option>
+            <option value="substack">Substack</option>
           </select>
         </label>
         <label>
@@ -113,7 +128,7 @@ export function ManualScrape({ pollIntervalMs = 1500 }: { pollIntervalMs?: numbe
           <select value={timeframe} onChange={(e) => setTimeframe(e.target.value as Timeframe)}>
             {TIMEFRAMES.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {TIMEFRAME_LABELS[t] ?? t}
               </option>
             ))}
           </select>
@@ -129,13 +144,22 @@ export function ManualScrape({ pollIntervalMs = 1500 }: { pollIntervalMs?: numbe
             ))}
           </select>
         </label>
+        {usesCreators && (platform === 'all' || platform === 'substack') && (
+          <label className="manual-scrape__notes">
+            <input type="checkbox" checked={includeNotes} onChange={(e) => setIncludeNotes(e.target.checked)} />
+            Include Substack Notes (slower)
+          </label>
+        )}
       </div>
 
       <button type="button" onClick={run} disabled={pill.status === 'running'}>
         Run scrape now
       </button>
       <span className="manual-scrape__summary">
-        {coreCount} creators + {keywords.length} keywords · {timeframe}
+        {[usesCreators ? `${creatorCount} creators` : null, usesKeywords ? `${keywords.length} keywords` : null]
+          .filter(Boolean)
+          .join(' + ')}{' '}
+        · {TIMEFRAME_LABELS[timeframe] ?? timeframe}
       </span>
 
       <span className="manual-scrape__pill" data-status={pill.status} role="status">

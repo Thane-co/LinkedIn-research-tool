@@ -23,13 +23,13 @@ implementation at every layer (TDD, red → green → refactor).**
 ## 1. Product summary
 
 A **single-user, fully-local desktop research tool** for finding viral social posts.
-It scrapes posts from **LinkedIn and Twitter/X** (by keyword and/or by creator) via
+It scrapes posts from **LinkedIn, Twitter/X, and Substack** (by keyword and/or by creator) via
 Apify, stores them in a local **SQLite** database, enriches them with **embeddings**
 (text + image) and an **x-factor** performance score, and presents them in a filterable
 UI where the user can:
 
 - Filter by **x-factor** (overperformance multiplier) and sort by it
-- Filter by **platform** (LinkedIn / Twitter / both)
+- Filter by **platform** (LinkedIn / Twitter / Substack — any subset, e.g. "Substack only" or "Substack + LinkedIn")
 - Filter by **time horizon** (last 24h / 3d / week / month / 3 months / custom range)
 - Group posts by **image similarity** ("same infographic / visual") and by
   **content similarity** ("trends" — embedding clusters)
@@ -304,11 +304,13 @@ CREATE INDEX IF NOT EXISTS posts_unembedded_idx       ON posts(embedded_at) WHER
 ```sql
 CREATE TABLE IF NOT EXISTS creators (
   id            TEXT PRIMARY KEY,              -- uuid-ish; generate with crypto.randomUUID()
-  platform      TEXT NOT NULL,                 -- 'linkedin' | 'twitter'
-  profile_url   TEXT NOT NULL,                 -- normalized profile url (LinkedIn) or https://x.com/<handle>
+  platform      TEXT NOT NULL,                 -- 'linkedin' | 'twitter' | 'substack'
+  profile_url   TEXT NOT NULL,                 -- normalized profile url (LinkedIn) / https://x.com/<handle> / https://<pub>.substack.com
   author_id     TEXT,                          -- clean slug/handle for x-factor matching
   display_name  TEXT,
   avatar_url    TEXT,
+  persona       TEXT,                          -- §17: the PERSON this account belongs to (normalized name key).
+                                               -- Accounts sharing a persona = one person across platforms.
   tier          TEXT NOT NULL DEFAULT 'core',  -- every creator is 'core' (the scrape set); retained for that filter
   tags          TEXT NOT NULL DEFAULT '[]',    -- JSON array of strings
   market        TEXT NOT NULL DEFAULT 'ai',
@@ -318,6 +320,7 @@ CREATE TABLE IF NOT EXISTS creators (
   UNIQUE(profile_url)
 );
 CREATE INDEX IF NOT EXISTS creators_tier_idx ON creators(tier);
+CREATE INDEX IF NOT EXISTS creators_persona_idx ON creators(persona);
 ```
 
 > **One creator list (no watch/core split in v1):** every creator is part of the scrape set —
@@ -372,6 +375,7 @@ Known keys (seeded with non-secret defaults on first migrate; secrets start NULL
 | `apify_keyword_actor_id` | `harvestapi/linkedin-post-search` | no | editable |
 | `apify_profile_actor_id` | `harvestapi/linkedin-profile-posts` | no | editable |
 | `apify_tweet_actor_id` | `apidojo/tweet-scraper` | no | editable; used for **both** tweet search & profile modes |
+| `apify_substack_actor_id` | `brilliant_gum/substack-insights-scraper` | no | editable; used for **both** Substack search & publication modes (§17) |
 | `default_market` | `ai` | no | |
 
 Rules:
@@ -600,11 +604,14 @@ Settings UI; the **API token** is the user's own (BYO):
 | `apify_keyword_actor_id` | `harvestapi/linkedin-post-search` | LinkedIn — keyword search |
 | `apify_profile_actor_id` | `harvestapi/linkedin-profile-posts` | LinkedIn — creator/profile |
 | `apify_tweet_actor_id` | `apidojo/tweet-scraper` | **Twitter — BOTH keyword & creator** |
+| `apify_substack_actor_id` | `brilliant_gum/substack-insights-scraper` | **Substack — BOTH keyword & creator** (§17) |
 
 > **Twitter uses ONE actor (`apidojo/tweet-scraper`) for both modes** — keyword search passes
 > `searchTerms`, creator scrape passes `twitterHandles`; only the *input shape* differs (§10.2).
-> Do not split this into two actor ids. If the Apify token or a needed actor id is empty, skip
-> that scraper gracefully and surface a Settings prompt.
+> Do not split this into two actor ids. **Substack likewise uses ONE actor
+> (`brilliant_gum/substack-insights-scraper`) for both modes** — keyword search passes
+> `searchQueries`, creator scrape passes `publicationHandles` (§10.2, §17). If the Apify token
+> or a needed actor id is empty, skip that scraper gracefully and surface a Settings prompt.
 
 > **Actor-id path encoding:** in Apify REST paths the `/` in an actor id becomes `~`
 > (e.g. `acts/harvestapi~linkedin-post-search/runs`). Encode it or every run 404s.
@@ -618,8 +625,13 @@ Settings UI; the **API token** is the user's own (BYO):
 ```
 **LinkedIn creator:**
 ```ts
-{ profileUrls: string[], maxPostsPerProfile: <10–100 by timeframe>, sortBy: 'date' }
+{ profileUrls: string[], maxPostsPerProfile: <10–100 by timeframe>,
+  postedLimit: <'any'|'24h'|'week'|'month'|'3months' by timeframe>, sortBy: 'date' }
 ```
+> **`postedLimit` bounds the creator scrape by DATE, not just count.** Without it, `maxPostsPerProfile`
+> alone means "week" pulls the 30 most-recent posts regardless of age (~50 days for a typical creator),
+> re-fetching and **re-paying for** posts already in the DB. The profile actor's `postedLimit` enum is
+> `any|1h|24h|week|month|3months|6months|year` (NO `past-` prefix — different from the keyword actor).
 **Twitter keyword:**
 ```ts
 { searchTerms: string[], maxItems: 200, sort: 'Top',
@@ -629,10 +641,38 @@ Settings UI; the **API token** is the user's own (BYO):
 ```ts
 { twitterHandles: string[], maxItems: 50, sort: 'Latest', minimumFavorites?: number }
 ```
+**Substack keyword** (input keys confirmed from the actor's input schema, §17):
+```ts
+{ searchQueries: string[], maxSearchResults: 25, maxPostsPerPublication: <10–100 by timeframe>,
+  dateFrom?: 'YYYY-MM-DD', dateTo?: 'YYYY-MM-DD', minReactions?: number }
+```
+**Substack creator:**
+```ts
+{ publicationHandles: string[],  // articles/posts
+  userHandles: string[],         // Notes feed (same handles)
+  maxPostsPerPublication: <10–500 by timeframe>, maxNotesPerAuthor: <20–500 by timeframe>,
+  dateFrom?: 'YYYY-MM-DD', dateTo?: 'YYYY-MM-DD', minReactions?: number }
+```
+> **Target by bare handle (`author_id`), NOT the profile url.** The actor scrapes publications; a
+> `substack.com/@handle` user-profile url passed via `urls` returns **zero** items. Every Substack
+> creator's `author_id` is the clean handle, so the creator scrape passes those as `publicationHandles`
+> (articles). **Notes are opt-in** (`includeNotes`): only then does it also pass `userHandles` (the Notes
+> feed), because Notes roughly double the actor work/cost — a posts-only run is much faster. Both caps
+> ceiling at **500** (the actor's max); `timeframe='all'` uses the ceiling with no date bound =
+> full-history backfill. Notes come back as `type:'note'` records; the actor also emits `type:'author'`
+> and `type:'publication'` metadata records, which `isSubstackContent` filters out before mapping (§10.3).
 
 Builder function names (in `lib/apify.ts`): `buildLinkedInKeywordInput(keywords, timeframe)`,
 `buildLinkedInCreatorInput(profileUrls, timeframe)`, `buildTwitterKeywordInput(keywords, opts?)`,
-`buildTwitterCreatorInput(handles, opts?)`. They are pure — no I/O.
+`buildTwitterCreatorInput(handles, opts?)`, `buildSubstackKeywordInput(keywords, timeframe, opts?)`,
+`buildSubstackCreatorInput(handles, timeframe, opts?)`. They are pure — no I/O. Substack reuses the same
+`MAX_POSTS_PER_PROFILE[timeframe]` bound as LinkedIn creator (posts-per-publication).
+
+> **Date-bounding by platform (cost control, §17).** Each creator scrape is bounded by date so a short
+> timeframe doesn't re-pull (re-pay for) old posts: LinkedIn via the relative `postedLimit` enum (pure,
+> in the builder); Substack via an absolute `dateFrom` (YYYY-MM-DD) that `jobs/scrape.ts` computes from
+> the timeframe (`now − TIMEFRAME_DAYS`) and passes through `opts` — keeping the builders time-free.
+> `'all'`/`'custom'` pass no bound.
 
 **Timeframe → actor bounds** (the `<timeframe>` placeholders above; chosen to bound each scrape):
 ```ts
@@ -675,6 +715,24 @@ not here — keeping the mapper a clean, fully-unit-testable transform.
   (the reference scrape was LinkedIn-only; do not guess the `apidojo/tweet-scraper` media field names,
   add them from a captured raw item + fixture).
 - `platform = 'twitter'`; `raw_data = JSON.stringify(raw)`.
+
+**`mapApifySubstackToRow(raw, market): PostRow` (Substack)** — field names from the actor's documented
+output schema (§17); reconcile against a captured raw item as new fields surface.
+- `id` = `substack-${raw.id ?? raw.slug}` (prefix prevents collision with LinkedIn/tweet ids). **Throw**
+  if neither `id` nor `slug` is present.
+- `url` = `raw.url`.
+- `content` = `[raw.title, raw.subtitle, raw.bodyMarkdown].filter(Boolean).join('\n\n')` or null — the
+  article title/subtitle/body, so keyword search + embeddings see the full text.
+- `author_id` = `raw.publicationHandle` (clean handle — **match on this**).
+- `author_url` = `raw.publicationUrl ?? https://${publicationHandle}.substack.com` (null if no handle).
+- `author_name` = `raw.author?.name ?? raw.publicationName ?? raw.publicationHandle ?? null`.
+- `author_type` = `'profile'`.
+- `likes = raw.reactionCount`, `comments = raw.commentCount`, `shares = raw.restackCount` (default 0).
+- `posted_at` = `raw.publishedAt` normalized to ISO (invalid/absent → null; never throw).
+- `is_repost = 0`.
+- **Media**: `raw.coverImage` → `{ type:'image', images:[coverImage] }`, thumbnail = `coverImage`; else
+  `null`. (So a Substack cover participates in image grouping like any other thumbnail, §9.)
+- `platform = 'substack'`; `raw_data = JSON.stringify(raw)`; embeddings/x-factor null.
 
 #### 10.3.1 Media extraction — `extractMedia(raw)` (pure, `lib/pure/media.ts`)
 
@@ -781,7 +839,10 @@ API credits). *Tested per route* + a helper unit test (cross-origin → 403, loc
 ### 11.1 `GET /api/posts` — the main read endpoint
 Query params:
 ```
-platform=linkedin|twitter|all           (default all)
+platform=linkedin|twitter|substack|all  (default all; ACCEPTS A COMMA LIST for a subset,
+                                          e.g. platform=substack,linkedin. 'all', empty, or the
+                                          full set = no platform filter. Unknown tokens ignored;
+                                          §17.)
 keywords=comma,separated                 (matched against content, case-insensitive LIKE)
 authors=comma,separated author_ids       (include filter; EMPTY = all creators, no filter)
 minLikes=int  minShares=int              (engagement floors; default 0)
@@ -815,9 +876,12 @@ Behavior:
   `groupByImage` takes precedence if both flags are set. `imageThreshold`/`textThreshold` override the §9.2 defaults.
   Each group/cluster carries a `similarity` score (§9.3/§9.4); an empty `imageGroups`/`contentClusters`
   array means nothing met the threshold (the UI shows an empty-state, not a blank page).
-- `availableAuthors` (always present) is the distinct `author_id`+`author_name`+`avatar`+`isCore` set
-  for the creator-filter dropdown. It honors the active filters **except** the `authors` include-list
-  (so selecting authors never shrinks the dropdown). The `posts` table has **no avatar column**, so
+- `availableAuthors` (always present) is the **one-row-per-account** `author_id`+`author_name`+
+  `platform`+`avatar`+`isCore`+`persona` set for the creator-filter dropdown. It honors the active
+  filters **except** the `authors` include-list (so selecting authors never shrinks the dropdown). One
+  `author_id` can accrue posts under several name variants (its real name *and* its bare handle); the
+  query **collapses these to a single row**, keeping the most human-looking name (a real name has a
+  space or a capital; ties break on post count). The `posts` table has **no avatar column**, so
   `avatar` is sourced from `creators.avatar_url` by matching on `author_id` (null when the author isn't
   a tracked creator). **`isCore`** is true when the `author_id` exists in `creators` (a creator you
   follow) vs. a keyword-surfaced one-off author (§2.4). This set may hold **thousands** of authors, so
@@ -910,7 +974,7 @@ Filter row → `/api/posts` params (§11.1):
 | Control | Param |
 |---|---|
 | Keywords… (chips) | `keywords` |
-| Creators (N) ▾ (empty = **All**; searchable + capped list; **Show all** / **Core creators (N)** quick-selects; avatars w/ initial fallback) | `authors` |
+| Creators (N) ▾ (empty = **All**; **search-first** type-to-find, no list until you type; empty box shows your current picks + a hint; **Clear** quick-select; platform badge per account; avatars w/ initial fallback) | `authors` |
 | ♥ number | `minLikes` |
 | ↗ number | `minShares` |
 | ✕ number | `minXFactor` |
@@ -926,10 +990,18 @@ Filter row → `/api/posts` params (§11.1):
 - **Results pagination:** the grid loads one page (default 50) and **auto-loads the next as the user
   nears the bottom** (infinite scroll), with a **"Load more"** button as fallback. `total` can be tens
   of thousands, so there is never an all-at-once render.
-- **Creators dropdown:** empty selection = All. A **filter box** narrows the list and rendering is
-  **capped** (the author set can be thousands). Two quick-selects: **Show all** (clears the filter) and
-  **Core creators (N)** (selects only `isCore` authors, §11.1). Each row shows an avatar, falling back
-  to a **colored initial** when the image is missing or expired (imported profile-photo URLs expire).
+- **Creators dropdown (search-first):** empty selection = All. The author set is tens of thousands, so
+  the dropdown is a **type-to-find** box, not a scrollable list — **nothing is listed until you type**.
+  The empty box shows only the creators you've **already selected** (so your picks stay visible while you
+  search) plus a "type a name to find creators across platforms" hint. Typing filters live; rendering is
+  still **capped** (§11.1). A single **Clear** quick-select empties the selection (= All). Each account
+  row carries a **platform badge** (LinkedIn / Substack / Twitter) so same-named accounts are
+  distinguishable; matching accounts of one **person** group under a "People — all accounts" header (by
+  `persona`, else a name-derived key — §17.3) for one-click select-all. `getAvailableAuthors` returns
+  **one row per account** (`author_id`), collapsing the handle-vs-display-name variants a single account
+  accrues into the most human-looking name. Each row shows an avatar, falling back to a **colored
+  initial** when the image is missing or expired (imported profile-photo URLs expire). (There is no
+  "Core creators" quick-select — the curated subset is managed in the Creators screen, not filtered here.)
 - **Numeric filters (♥/↗/✕):** render **empty with a `0` placeholder** (never a stuck literal `0`); ✕
   (min x-factor) accepts decimals.
 - **Filter-bar layout:** a **responsive grid** — controls flow into aligned columns and wrap into tidy
@@ -1353,3 +1425,94 @@ the only way to "lose" keys.)
   there is no `node-cron` or "scrape weekly" toggle.
 - **`sqlite-vec` extension:** only if in-JS cosine over the 400-candidate cap ever becomes a
   bottleneck (it won't at this scale) — see §3.
+
+---
+
+## 17. Substack + cross-platform creator view
+
+Two related additions, layered on the existing architecture without breaking any invariant above:
+(1) **Substack as a third platform**, and (2) a way to see **one person's posts across every
+platform in chronological order** so you can tell what they publish each day and how they
+cross-reference content between LinkedIn, Twitter/X, and Substack.
+
+### 17.1 Substack platform
+
+Substack is a first-class platform alongside LinkedIn and Twitter, using the same scrape → map →
+dedup → enrich → x-factor pipeline. It reuses **one Apify actor for both modes**
+(`brilliant_gum/substack-insights-scraper`, §6.4), exactly like Twitter.
+
+- **`Platform`** widens to `'linkedin' | 'twitter' | 'substack'`. Every enum surface (schema comments,
+  the `PLATFORMS` whitelist in `/api/posts`, badges) includes it.
+- **Actor id:** `apify_substack_actor_id`, seeded default `brilliant_gum/substack-insights-scraper`,
+  editable in Settings. Missing token/actor id → skip that scraper, surface a Settings prompt.
+- **Input builders** (§10.2): `buildSubstackKeywordInput` (`searchQueries`), `buildSubstackCreatorInput`
+  (`publicationHandles` — bare handles, NOT profile urls). Input keys (`searchQueries`,
+  `publicationHandles`, `maxPostsPerPublication`, `maxSearchResults`, `dateFrom`/`dateTo`,
+  `minReactions`) are from the actor's input schema.
+- **Mapper** `mapApifySubstackToRow` (§10.3): id `substack-<id|slug>`; engagement maps
+  `reactionCount→likes`, `commentCount→comments`, `restackCount→shares`; `coverImage` → image media.
+  A **Note** record (`type:'note'`) maps to id `substack-note-<id>`, content from the note body, author
+  from `handle`, and `is_repost=1` when `kind==='restack'`.
+- **Full history** (§17.3): Manual Scrape's `timeframe='all'` ("All time — full history") drops the date
+  bound and raises the Substack caps to the actor ceiling (500 posts + 500 notes per creator), and
+  LinkedIn `postedLimit='any'` with `maxPosts=500`. It's a one-time deep backfill — expensive on Apify
+  (pay-per-result) and mostly duplicates on repeat runs, so it's not the default.
+- **Creator add** (§11.2): a `substack.com` url (e.g. `https://<pub>.substack.com` or
+  `https://substack.com/@<handle>`) detects platform `substack`; `extractSubstackHandle` derives the
+  clean handle as `author_id`. A **custom-domain** publication must be added by its `.substack.com`
+  url (custom domains aren't auto-detected — documented limitation, not a bug). A **bare** `@handle` or
+  word stays **Twitter** (existing behavior) — the two handle namespaces are ambiguous, so Substack is
+  URL-driven. LinkedIn detection (`linkedin.com`) is checked first, then `substack.com`, then Twitter.
+- **x-factor, dedup, grouping, filters** all work unchanged — a Substack post is just a `PostRow`.
+
+### 17.2 Persona — linking a person's accounts
+
+The `creators` table is **one row per account**. To treat "Lara Acosta on LinkedIn", "…on Substack",
+and "…on X" as **one person**, each creator carries a **`persona`** key (§6.2): a normalized label.
+**Accounts sharing a `persona` value are the same person.**
+
+- **Derivation** (`lib/pure/persona.ts`, Layer 0, pure): `derivePersonaKey(name)` normalizes a display
+  name to a stable key — trim credentials after the first comma, lowercase, strip diacritics, drop
+  non-alphanumerics, collapse whitespace. `"Lara Acosta, PhD"` → `"lara acosta"`. Empty/none → `null`.
+- **Auto by default, manual override** (§11.2 route): on add/re-add, `persona = body.persona (trimmed)
+  ?? derivePersonaKey(display_name)`. So the persona is **auto-assigned from the display name** (the
+  "auto-match" default) and is **also stored** as a label on the account; the user can pass an explicit
+  `persona` to fix a mis-match (different name spellings, common names). The repo `COALESCE`s persona so
+  a provided value wins and an omitted one preserves the existing label. Display name is auto-filled
+  from an existing post by that author (§11.2), so the persona fills in once a post exists.
+- Persona lives **only** on `creators` (tracked people) — keyword-surfaced one-off authors have none.
+
+### 17.3 Seeing the cross-platform timeline (dashboard extension — no new screen)
+
+The **existing Search dashboard** is the surface (per the build decision). Two small changes let it
+show a person's whole cross-platform feed in chronological order:
+
+- **`availableAuthors`** (§11.1) gains a `persona` field, sourced from `creators.persona` by `author_id`
+  (null for non-creators), and a `platform` field (which platform the account posts on). Both join the
+  same way the existing `avatar`/`isCore` fields do. It returns **one row per account** — the query
+  collapses the handle-vs-display-name variants a single `author_id` accrues to the most human-looking
+  name (so an account never shows as two rows).
+- **Creator dropdown** (`DashboardFilterBar`) groups matching accounts into a **person** when they share
+  a `persona` **or** (when no persona is set) a name-derived key (`derivePersonaKey`), so two accounts
+  named "Noah West" link across platforms even before either is a tracked creator. Selecting a person
+  toggles **all** of that person's `author_id`s into the existing `authors` include-list at once (person
+  → set of handles). Individual accounts still select individually. Because the dropdown is search-first
+  (§11.5), grouping only runs over the typed matches — it never enumerates the full author set into the
+  URL (§11.1).
+- With the person's handles selected + **platform** = All (or a chosen subset) + **sort = Newest**, the
+  grid **is** the chronological cross-platform feed: every platform's posts for that person, newest
+  first. No new endpoint, no day-bucketing table — `sort=recent` over `author_id IN (…)` already does it.
+
+### 17.4 Multi-platform filter
+
+`platform` (query param + `PostFilters`) accepts a **subset**, not just one value, so "Substack only" and
+"Substack + LinkedIn" are both expressible. Repo `buildWhere` uses `platform IN (…)` when
+`filters.platforms` is a non-empty subset; `'all'` / empty / the full set apply no platform filter.
+The dashboard platform control becomes **toggle pills** (LinkedIn / Twitter / Substack); the selection
+serializes to `platform=<comma list>` and unknown tokens are ignored server-side (§11.1).
+
+### 17.5 What does NOT change (scope guard)
+
+No new screen, no `personas` table, no automatic account-merging beyond the display-name-derived key,
+no day-grouping artifact, no scheduler. Substack is a platform, persona is a column, the timeline is the
+existing grid with a persona-aware creator filter. Everything else in this PRD holds verbatim.

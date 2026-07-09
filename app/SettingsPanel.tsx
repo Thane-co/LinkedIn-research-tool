@@ -23,6 +23,7 @@ const ACTOR_FIELDS = [
   { key: 'apify_keyword_actor_id', label: 'LinkedIn keyword actor' },
   { key: 'apify_profile_actor_id', label: 'LinkedIn profile actor' },
   { key: 'apify_tweet_actor_id', label: 'Twitter actor' },
+  { key: 'apify_substack_actor_id', label: 'Substack actor' },
 ] as const
 const PROVIDERS = ['apify', 'voyage', 'anthropic'] as const
 

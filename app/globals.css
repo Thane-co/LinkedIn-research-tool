@@ -182,6 +182,19 @@ button[aria-pressed='true'] {
   background: #eef2ff;
   color: #3730a3;
 }
+/* Per-platform badge tints (§17.1). */
+.badge--platform.badge--linkedin {
+  background: #eef4ff;
+  color: #0a66c2;
+}
+.badge--platform.badge--twitter {
+  background: #eef6ff;
+  color: #1d9bf0;
+}
+.badge--platform.badge--substack {
+  background: #fff1ea;
+  color: #ff6719;
+}
 .chip {
   display: inline-flex;
   align-items: center;
@@ -204,6 +217,65 @@ button[aria-pressed='true'] {
 .chip--tag {
   background: var(--tag-bg);
   color: var(--tag-fg);
+}
+/* Persona chip (§17.2): the person an account belongs to. */
+.chip--person {
+  background: #f3e8ff;
+  color: #6b21a8;
+}
+
+/* Platform toggle pills (§17.4): a "Platform" label above a single, non-wrapping row of pills. */
+.filter-bar__platforms {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.filter-bar__platforms legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.filter-bar__platform-list {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+.filter-bar__platform {
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.filter-bar__platform[aria-pressed='true'] {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+
+/* Persona ("People") group in the creators dropdown (§17.3). */
+.filter-bar__personas {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+}
+.filter-bar__personas-title {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.filter-bar__person-count {
+  color: var(--text-muted);
+  font-weight: 400;
 }
 
 /* ── Dashboard / Search screen ─────────────────────────────────────────── */
@@ -275,9 +347,9 @@ button[aria-pressed='true'] {
    flex wrapping). Every control fills its column; the keyword box spans two; Search sits on a
    clean trailing row, right-aligned. */
 .filter-bar {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
   gap: 12px;
   padding: 16px;
   background: var(--surface);
@@ -288,7 +360,7 @@ button[aria-pressed='true'] {
 }
 .filter-bar__field,
 .filter-bar__creators {
-  width: 100%;
+  flex: 0 1 150px;
   min-width: 0;
 }
 .filter-bar__field select,
@@ -297,11 +369,14 @@ button[aria-pressed='true'] {
   box-sizing: border-box;
 }
 .filter-bar__keywords {
-  grid-column: span 2;
+  flex: 1 1 300px; /* grows to absorb the slack on its row */
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+}
+.filter-bar__platforms {
+  flex: 0 0 auto; /* sizes to the pill row so all three stay on one line */
 }
 .filter-bar__field input[type='number'] {
   width: 100%;
@@ -340,7 +415,7 @@ button[aria-pressed='true'] {
   position: absolute;
   z-index: 20;
   margin-top: 4px;
-  min-width: 220px;
+  width: 300px; /* fixed so long creator names ellipsis instead of blowing out the panel */
   max-height: 280px;
   overflow-y: auto;
   display: flex;
@@ -398,10 +473,25 @@ button[aria-pressed='true'] {
   font-weight: 700;
   line-height: 1;
 }
+/* The creators <details> also carries .filter-bar__field, whose `input { width:100% }` rule would
+ * stretch every row checkbox and shove the avatar+name to the right. Keep panel checkboxes natural. */
+.filter-bar__creators-panel input[type='checkbox'] {
+  width: auto;
+  flex-shrink: 0;
+  margin: 0;
+}
 .filter-bar__creator-name {
+  flex: 1 1 auto;
+  min-width: 0; /* allow the ellipsis to kick in within the fixed-width panel */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Compact platform badge on a creator row so you can tell LinkedIn from Substack at a glance. */
+.filter-bar__creator-platform {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  font-size: 10px;
 }
 .filter-bar__creators-empty {
   color: var(--text-muted);
@@ -409,9 +499,8 @@ button[aria-pressed='true'] {
   padding: 4px;
 }
 .filter-bar__search {
-  grid-column: 1 / -1;
-  justify-self: end;
-  align-self: end;
+  margin-left: auto; /* trailing action: hugs the right edge of its (last) row */
+  align-self: flex-end;
   padding: 9px 28px;
 }
 
@@ -757,6 +846,7 @@ button[aria-pressed='true'] {
 }
 .keywords__market-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-bottom: 8px;
@@ -764,7 +854,9 @@ button[aria-pressed='true'] {
 .keywords__market-head strong {
   text-transform: capitalize;
 }
-.keywords__market-head button {
+/* Only the Remove-market button (direct child) gets the danger styling + right-alignment — NOT the
+ *  Add button, which now lives inside .keywords__add in the header. */
+.keywords__remove-market {
   margin-left: auto;
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border-strong));
@@ -772,11 +864,21 @@ button[aria-pressed='true'] {
 .keywords__terms {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   gap: 6px;
 }
+.keywords__terms-empty {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+/* Add-keyword control, inline in the market header (next to the title). */
 .keywords__add {
-  margin-left: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.keywords__add input {
+  width: 180px;
 }
 .keywords__new {
   display: flex;
@@ -788,8 +890,21 @@ button[aria-pressed='true'] {
 .manual-scrape__controls {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-end;
   gap: 12px;
   margin-bottom: 12px;
+}
+/* Notes checkbox: inline (box + label), bottom-aligned with the neighbouring selects. */
+.manual-scrape__notes {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  padding-bottom: 6px;
+}
+.manual-scrape__notes input {
+  width: auto;
 }
 .manual-scrape__summary {
   margin-left: 10px;

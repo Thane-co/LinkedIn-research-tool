@@ -12,13 +12,14 @@ export interface NewCreator {
   author_id?: string | null
   display_name?: string | null
   avatar_url?: string | null
+  persona?: string | null
   tier?: CreatorTier
   tags?: string[]
   market?: string
   notes?: string | null
 }
 
-const COLUMNS = `id, platform, profile_url, author_id, display_name, avatar_url, tier, tags, market, notes, added_at, updated_at`
+const COLUMNS = `id, platform, profile_url, author_id, display_name, avatar_url, persona, tier, tags, market, notes, added_at, updated_at`
 
 function getByUrl(profileUrl: string): CreatorRow | undefined {
   return getDb()
@@ -33,18 +34,22 @@ export function upsertCreator(creator: NewCreator): CreatorRow {
   const existing = getByUrl(creator.profile_url)
 
   if (existing) {
-    // Keep it in the scrape set (tier 'core'); fill in any newly-provided display fields.
+    // Keep it in the scrape set (tier 'core'); fill in any newly-provided display fields. persona
+    // COALESCEs so a provided value (auto-derived or a manual override) wins and an omitted one
+    // preserves the existing label (§17.2).
     db.prepare(
       `UPDATE creators SET tier = 'core',
          display_name = COALESCE(?, display_name),
          avatar_url   = COALESCE(?, avatar_url),
          author_id    = COALESCE(?, author_id),
+         persona      = COALESCE(?, persona),
          updated_at   = ?
        WHERE profile_url = ?`,
     ).run(
       creator.display_name ?? null,
       creator.avatar_url ?? null,
       creator.author_id ?? null,
+      creator.persona ?? null,
       now,
       creator.profile_url,
     )
@@ -58,6 +63,7 @@ export function upsertCreator(creator: NewCreator): CreatorRow {
     author_id: creator.author_id ?? null,
     display_name: creator.display_name ?? null,
     avatar_url: creator.avatar_url ?? null,
+    persona: creator.persona ?? null,
     tier: creator.tier ?? 'core',
     tags: JSON.stringify(creator.tags ?? []),
     market: creator.market ?? 'ai',
@@ -67,7 +73,7 @@ export function upsertCreator(creator: NewCreator): CreatorRow {
   }
   db.prepare(
     `INSERT INTO creators (${COLUMNS}) VALUES
-     (@id, @platform, @profile_url, @author_id, @display_name, @avatar_url, @tier, @tags, @market, @notes, @added_at, @updated_at)`,
+     (@id, @platform, @profile_url, @author_id, @display_name, @avatar_url, @persona, @tier, @tags, @market, @notes, @added_at, @updated_at)`,
   ).run(row)
   return row
 }

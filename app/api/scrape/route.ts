@@ -25,18 +25,22 @@ export async function POST(req: Request): Promise<NextResponse> {
     creatorIds?: string[]
     timeframe?: Timeframe
     market?: string
+    includeNotes?: boolean
   }
-  const platforms = body.platforms ?? ['linkedin', 'twitter']
+  const platforms = body.platforms ?? ['linkedin', 'twitter', 'substack']
   const mode = body.mode ?? 'both'
   const timeframe = body.timeframe ?? 'week'
   const market = body.market ?? getSettings().default_market ?? 'ai'
 
+  // Keywords only apply to keyword/both runs; never record them on a creators-only job (the scrape
+  // ignores them anyway, and storing them made the history show keywords for a creator run).
+  const usesKeywords = mode === 'keyword' || mode === 'both'
   // Create the job up front so we can return its id immediately (PRD §10.6), then run async.
   const job = createJob({
     mode,
     platforms,
     market,
-    params: { timeframe, keywords: body.keywords ?? [], creatorIds: body.creatorIds ?? [] },
+    params: { timeframe, keywords: usesKeywords ? (body.keywords ?? []) : [], creatorIds: body.creatorIds ?? [] },
   })
   void runScrape({
     platforms,
@@ -45,6 +49,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     creatorIds: body.creatorIds,
     timeframe,
     market,
+    includeNotes: body.includeNotes ?? false,
     jobId: job.id,
   }).catch((err) => console.error('scrape: runScrape crashed:', (err as Error).message))
 

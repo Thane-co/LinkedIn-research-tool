@@ -31,6 +31,32 @@ describe('CreatorManager', () => {
     expect(await screen.findByText('Jane Doe')).toBeInTheDocument()
   })
 
+  it('shows the persona label on a creator row (§17.2)', async () => {
+    server.use(
+      http.get('*/api/creators', () =>
+        HttpResponse.json({ creators: [creator({ persona: 'lara acosta', platform: 'substack' })], tags: [] }),
+      ),
+    )
+    render(<CreatorManager />)
+    expect(await screen.findByText(/lara acosta/i)).toBeInTheDocument()
+  })
+
+  it('sends an explicit persona when the Person field is filled (§17.2)', async () => {
+    const cap: { body: { persona?: string } | null } = { body: null }
+    server.use(
+      http.get('*/api/creators', () => HttpResponse.json({ creators: [], tags: [] })),
+      http.post('*/api/creators', async ({ request }) => {
+        cap.body = (await request.json()) as { persona?: string }
+        return HttpResponse.json({ creators: [], tags: [] })
+      }),
+    )
+    render(<CreatorManager />)
+    await userEvent.type(screen.getByLabelText(/profile url/i), 'https://lara.substack.com')
+    await userEvent.type(screen.getByLabelText(/^person$/i), 'Lara Acosta')
+    await userEvent.click(screen.getByRole('button', { name: /^add$/i }))
+    expect(cap.body).toMatchObject({ persona: 'Lara Acosta' })
+  })
+
   it('adds a creator via POST with the profile input', async () => {
     const cap: { body: { inputs?: string[] } | null } = { body: null }
     server.use(

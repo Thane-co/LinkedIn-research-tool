@@ -97,7 +97,29 @@ export function KeywordsEditor() {
         <div key={market} className="keywords__market">
           <div className="keywords__market-head">
             <strong>{market}</strong>
-            <button type="button" aria-label={`remove market ${market}`} onClick={() => removeMarket(market)}>
+            <div className="keywords__add">
+              <input
+                aria-label={`Add keyword to ${market}`}
+                placeholder="Add keyword…"
+                value={drafts[market] ?? ''}
+                onChange={(e) => setDrafts((d) => ({ ...d, [market]: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    void addKeyword(market)
+                  }
+                }}
+              />
+              <button type="button" aria-label={`Add to ${market}`} onClick={() => addKeyword(market)}>
+                Add
+              </button>
+            </div>
+            <button
+              type="button"
+              className="keywords__remove-market"
+              aria-label={`remove market ${market}`}
+              onClick={() => removeMarket(market)}
+            >
               Remove market
             </button>
           </div>
@@ -110,22 +132,9 @@ export function KeywordsEditor() {
                 </button>
               </span>
             ))}
-            <label className="keywords__add">
-              {`Add keyword to ${market}`}
-              <input
-                value={drafts[market] ?? ''}
-                onChange={(e) => setDrafts((d) => ({ ...d, [market]: e.target.value }))}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    void addKeyword(market)
-                  }
-                }}
-              />
-            </label>
-            <button type="button" onClick={() => addKeyword(market)}>
-              {`Add to ${market}`}
-            </button>
+            {(byMarket.get(market) ?? []).length === 0 && (
+              <span className="keywords__terms-empty">No keywords yet — add one above.</span>
+            )}
           </div>
         </div>
       ))}

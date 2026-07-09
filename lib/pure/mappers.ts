@@ -7,7 +7,7 @@
 
 import { extractMedia } from '@/lib/pure/media'
 import { extractActivityId } from '@/lib/pure/url'
-import type { ApifyPost, ApifyTweet, PostRow } from '@/lib/types'
+import type { ApifyPost, ApifySubstackPost, ApifyTweet, PostRow } from '@/lib/types'
 
 const nowIso = (): string => new Date().toISOString()
 
@@ -81,6 +81,114 @@ export function mapApifyTweetToRow(raw: ApifyTweet, market: string): PostRow {
     market,
     media: null, // Twitter media mapping pending a real tweet payload (PRD §10.3)
     image_url: null,
+    raw_data: JSON.stringify(raw),
+    ...blankEnrichment,
+  }
+}
+
+/** Parse a date to an ISO-8601 UTC string, or null if absent/unparseable (never throws). */
+function toIsoOrNull(value: string | null | undefined): string | null {
+  if (!value) return null
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
+}
+
+/**
+ * True only for Substack records that are actual content (a post/article or a note). The actor also
+ * emits `type:'author'` and `type:'publication'` metadata records (e.g. when `userHandles` is set),
+ * which carry no post and must be skipped — otherwise they land as blank "Unknown" cards (§17).
+ */
+export function isSubstackContent(raw: ApifySubstackPost): boolean {
+  const t = raw.type
+  return t === undefined || t === 'post' || t === 'note'
+}
+
+/**
+ * A note is worth storing only if it carries something displayable: body text, an image attachment,
+ * or a restacked article. The actor returns some notes completely empty (a Substack-rendered quote
+ * card with no scraped body/image) — those become blank cards, so the scrape skips them (§17).
+ */
+export function substackNoteHasContent(raw: ApifySubstackPost): boolean {
+  return (
+    !!(raw.body && raw.body.trim()) ||
+    (raw.attachmentUrls?.length ?? 0) > 0 ||
+    !!raw.restackedPost ||
+    !!raw.restackedPublication
+  )
+}
+
+/**
+ * Substack Note: map a raw note record to a PostRow (§17). id prefixed 'substack-note-'. Field names
+ * confirmed from a real run: authorHandle/authorName, body, createdAt, reactionCount, attachmentUrls.
+ * Notes have no comment/restack counts (only reactions); an image-only note has an empty body.
+ */
+function mapSubstackNoteToRow(raw: ApifySubstackPost, market: string): PostRow {
+  if (raw.id === undefined || raw.id === null || raw.id === '') {
+    throw new Error('mapApifySubstackToRow: note missing id')
+  }
+  const handle = raw.authorHandle ?? null
+  const images = (raw.attachmentUrls ?? []).filter((u): u is string => !!u)
+  // A note keeps its OWN url (always unique). A restacked article's url would collide with that same
+  // article scraped as a post (unique-url index), so we never use it as the row url.
+  const noteUrl = handle ? `https://substack.com/@${handle}/note/c-${raw.id}` : null
+  // A restack note has no body — surface the boosted article's title instead.
+  const content = raw.body && raw.body.trim() ? raw.body : (raw.restackedPost?.title ?? null)
+
+  return {
+    id: `substack-note-${raw.id}`,
+    platform: 'substack',
+    url: noteUrl,
+    content,
+    author_name: raw.authorName ?? handle,
+    author_url: handle ? `https://substack.com/@${handle}` : null,
+    author_id: handle,
+    author_type: 'profile',
+    likes: raw.reactionCount ?? 0,
+    shares: 0, // notes carry no restack/comment counts
+    comments: 0,
+    posted_at: toIsoOrNull(raw.createdAt),
+    scraped_at: nowIso(),
+    is_repost: raw.kind === 'restack' ? 1 : 0, // a restack note boosts someone else's post
+    scrape_source: null,
+    market,
+    media: images.length ? JSON.stringify({ type: 'image', images }) : null,
+    image_url: images[0] ?? null,
+    raw_data: JSON.stringify(raw),
+    ...blankEnrichment,
+  }
+}
+
+/** Substack: map a raw record to a PostRow. Handles both posts/articles and Notes (type:'note').
+ *  id is prefixed 'substack-'. Throws when no id/slug can be derived. */
+export function mapApifySubstackToRow(raw: ApifySubstackPost, market: string): PostRow {
+  if (raw.type === 'note') return mapSubstackNoteToRow(raw, market)
+  const key = raw.id ?? raw.slug
+  if (key === undefined || key === null || key === '') {
+    throw new Error('mapApifySubstackToRow: missing post id and slug')
+  }
+  const handle = raw.publicationHandle ?? null
+  const cover = raw.coverImage ?? null
+  const content = [raw.title, raw.subtitle, raw.bodyMarkdown].filter(Boolean).join('\n\n') || null
+
+  return {
+    id: `substack-${key}`,
+    platform: 'substack',
+    url: raw.url ?? null,
+    content,
+    author_name: raw.author?.name ?? raw.publicationName ?? handle,
+    author_url: raw.publicationUrl ?? (handle ? `https://${handle}.substack.com` : null),
+    author_id: handle,
+    author_type: 'profile',
+    likes: raw.reactionCount ?? 0,
+    shares: raw.restackCount ?? 0,
+    comments: raw.commentCount ?? 0,
+    posted_at: toIsoOrNull(raw.publishedAt),
+    scraped_at: nowIso(),
+    is_repost: 0,
+    scrape_source: null,
+    market,
+    media: cover ? JSON.stringify({ type: 'image', images: [cover] }) : null,
+    image_url: cover,
     raw_data: JSON.stringify(raw),
     ...blankEnrichment,
   }

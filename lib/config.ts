@@ -37,6 +37,7 @@ export const SETTINGS_DEFAULTS = {
   apify_keyword_actor_id: 'harvestapi/linkedin-post-search',
   apify_profile_actor_id: 'harvestapi/linkedin-profile-posts',
   apify_tweet_actor_id: 'apidojo/tweet-scraper', // ONE actor for both tweet search & profile modes
+  apify_substack_actor_id: 'brilliant_gum/substack-insights-scraper', // ONE actor for both Substack modes (§17)
   default_market: 'ai',
 } as const
 

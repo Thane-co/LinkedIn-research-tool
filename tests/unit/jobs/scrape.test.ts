@@ -5,8 +5,9 @@ import { enrichPosts } from '@/jobs/enrich'
 import { getDb, resetDb } from '@/lib/db/db'
 import { upsertCreator } from '@/lib/db/creators.repo'
 import { getAuthorHistory, insertPosts, searchPosts } from '@/lib/db/posts.repo'
+import { fetchSubstackNoteContent } from '@/lib/substack'
 import { makePostRow } from '@/tests/fixtures/posts'
-import type { ApifyPost } from '@/lib/types'
+import type { ApifyPost, ApifySubstackPost } from '@/lib/types'
 
 // Keep the pure input builders real; mock only the network run (PRD §12 step 21) + the follow-on
 // enrich (its own unit covers it — here we only assert it is/ isn't fired).
@@ -17,9 +18,12 @@ vi.mock('@/lib/apify', async (importOriginal) => {
 vi.mock('@/jobs/enrich', () => ({
   enrichPosts: vi.fn().mockResolvedValue({ embedded: 0, remaining: 0 }),
 }))
+// The note backfill hits Substack's reader API — mock it (returns null by default = no backfill).
+vi.mock('@/lib/substack', () => ({ fetchSubstackNoteContent: vi.fn().mockResolvedValue(null) }))
 
 const mockRunActor = vi.mocked(runActor)
 const mockEnrich = vi.mocked(enrichPosts)
+const mockNoteBackfill = vi.mocked(fetchSubstackNoteContent)
 
 /** Build a raw Apify LinkedIn item whose canonical id derives from the url (not raw.id). */
 const liItem = (activityId: string, over: Partial<ApifyPost> = {}): ApifyPost => ({
@@ -32,10 +36,24 @@ const liItem = (activityId: string, over: Partial<ApifyPost> = {}): ApifyPost =>
   ...over,
 })
 
+/** Build a raw Apify Substack item. */
+const substackItem = (id: string, over: Partial<ApifySubstackPost> = {}): ApifySubstackPost => ({
+  id,
+  slug: `post-${id}`,
+  url: `https://laraacosta.substack.com/p/post-${id}`,
+  title: 'a substack post about ai agents',
+  publishedAt: '2026-06-21T00:00:00.000Z',
+  publicationHandle: 'laraacosta',
+  publicationName: 'Lara Acosta',
+  reactionCount: 50,
+  ...over,
+})
+
 beforeEach(() => {
   getDb(':memory:')
   vi.clearAllMocks()
   mockEnrich.mockResolvedValue({ embedded: 0, remaining: 0 })
+  mockNoteBackfill.mockResolvedValue(null) // default: no backfill (reset by clearAllMocks)
 })
 afterEach(() => resetDb())
 
@@ -76,6 +94,115 @@ describe('runScrape', () => {
     const job = searchPosts({}) // sanity: rows landed
     expect(job.total).toBe(3)
     expect(mockEnrich).toHaveBeenCalledTimes(1) // fired because inserted > 0
+  })
+
+  it('scrapes a Substack creator via the substack actor and maps its posts (§17.1)', async () => {
+    upsertCreator({
+      platform: 'substack',
+      profile_url: 'https://laraacosta.substack.com',
+      author_id: 'laraacosta',
+      tier: 'core',
+    })
+    let creatorInput: Record<string, unknown> | null = null
+    mockRunActor.mockImplementation(async (_actorId, input: object) => {
+      if ('publicationHandles' in input) {
+        creatorInput = input as Record<string, unknown>
+        return [substackItem('1'), substackItem('2')]
+      }
+      return []
+    })
+
+    const stats = await runScrape({
+      platforms: ['substack'],
+      mode: 'creator',
+      timeframe: 'week',
+      market: 'ai',
+      includeNotes: true,
+    })
+
+    expect(creatorInput).not.toBeNull() // creator mode targets publications by handle
+    expect(creatorInput!.publicationHandles).toEqual(['laraacosta']) // the creator's author_id, not its profile url
+    expect(creatorInput!.userHandles).toEqual(['laraacosta']) // includeNotes threaded through → Notes feed requested
+    // a bounded timeframe passes a dateFrom cutoff so we don't re-fetch (re-pay for) old posts
+    expect(typeof creatorInput!.dateFrom).toBe('string')
+    expect(stats.inserted).toBe(2)
+    const rows = searchPosts({ platforms: ['substack'] }).posts
+    expect(rows.map((p) => p.id).sort()).toEqual(['substack-1', 'substack-2'])
+    expect(rows.every((p) => p.platform === 'substack')).toBe(true)
+  })
+
+  it('skips Substack author/publication metadata records (only posts + notes are stored) (§17)', async () => {
+    upsertCreator({
+      platform: 'substack',
+      profile_url: 'https://laraacosta.substack.com',
+      author_id: 'laraacosta',
+      tier: 'core',
+    })
+    mockRunActor.mockImplementation(async (_actorId, input: object) => {
+      if ('publicationHandles' in input) {
+        return [
+          substackItem('1'), // a real post
+          { type: 'author', id: 'auth-1', handle: 'laraacosta' } as unknown as ApifySubstackPost, // metadata
+          { type: 'publication', id: 'pub-1' } as unknown as ApifySubstackPost, // metadata
+          { type: 'note', id: 'note-1', authorHandle: 'laraacosta', body: 'a note', reactionCount: 3 } as unknown as ApifySubstackPost,
+          { type: 'note', id: 'empty-1', authorHandle: 'laraacosta', body: '' } as unknown as ApifySubstackPost, // empty → skipped
+        ]
+      }
+      return []
+    })
+
+    const stats = await runScrape({ platforms: ['substack'], mode: 'creator', timeframe: 'week', market: 'ai' })
+
+    expect(stats.inserted).toBe(2) // the post + the note; the 2 metadata records are dropped
+    const ids = searchPosts({ platforms: ['substack'] }).posts.map((p) => p.id).sort()
+    expect(ids).toEqual(['substack-1', 'substack-note-note-1'])
+  })
+
+  it('backfills an empty post-share note from the reader API, dropping only the un-backfillable (§17)', async () => {
+    upsertCreator({ platform: 'substack', profile_url: 'https://laraacosta.substack.com', author_id: 'laraacosta', tier: 'core' })
+    mockRunActor.mockImplementation(async (_a, input: object) => {
+      if ('publicationHandles' in input) {
+        return [
+          { type: 'note', id: 'share-1', authorHandle: 'laraacosta', body: '' } as unknown as ApifySubstackPost, // empty → backfill succeeds
+          { type: 'note', id: 'dead-1', authorHandle: 'laraacosta', body: '' } as unknown as ApifySubstackPost, // empty → backfill fails → dropped
+        ]
+      }
+      return []
+    })
+    // First empty note backfills; second returns null (un-recoverable) and is dropped.
+    mockNoteBackfill
+      .mockResolvedValueOnce({ content: 'Shared: The 3x Templates', imageUrl: 'https://cdn/cover.png' })
+      .mockResolvedValueOnce(null)
+
+    const stats = await runScrape({ platforms: ['substack'], mode: 'creator', timeframe: 'week', market: 'ai' })
+
+    expect(mockNoteBackfill).toHaveBeenCalledTimes(2) // both empties attempted
+    expect(stats.inserted).toBe(1) // only the backfilled one survives
+    const note = searchPosts({ platforms: ['substack'] }).posts[0]!
+    expect(note.content).toBe('Shared: The 3x Templates')
+    expect(note.image_url).toBe('https://cdn/cover.png')
+    expect(note.url).toBe('https://substack.com/@laraacosta/note/c-share-1') // its own note url, not the article
+  })
+
+  it('runs LinkedIn + Substack together when both platforms are requested', async () => {
+    upsertCreator({ platform: 'linkedin', profile_url: 'https://www.linkedin.com/in/jane', author_id: 'jane', tier: 'core' })
+    upsertCreator({ platform: 'substack', profile_url: 'https://laraacosta.substack.com', author_id: 'laraacosta', tier: 'core' })
+    mockRunActor.mockImplementation(async (_a, input: object) => {
+      if ('profileUrls' in input) return [liItem('100')]
+      if ('publicationHandles' in input) return [substackItem('1')]
+      return []
+    })
+
+    const stats = await runScrape({
+      platforms: ['linkedin', 'substack'],
+      mode: 'creator',
+      timeframe: 'week',
+      market: 'ai',
+    })
+
+    expect(stats.inserted).toBe(2)
+    expect(searchPosts({ platforms: ['substack'] }).total).toBe(1)
+    expect(searchPosts({ platforms: ['linkedin'] }).total).toBe(1)
   })
 
   it('completes when one scraper returns nothing', async () => {

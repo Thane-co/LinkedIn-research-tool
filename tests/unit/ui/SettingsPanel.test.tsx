@@ -12,6 +12,7 @@ const view = (over: Partial<SettingsView> = {}): SettingsView => ({
     voyage_api_key: 'unset',
     anthropic_api_key: 'unset',
     apify_keyword_actor_id: 'harvestapi/linkedin-post-search',
+    apify_substack_actor_id: 'brilliant_gum/substack-insights-scraper',
     ...over.settings,
   },
   ready: { apify: false, voyage: false, anthropic: false, ...over.ready },
@@ -23,6 +24,12 @@ describe('SettingsPanel', () => {
   it('shows an onboarding gate while Apify or Voyage is not ready', () => {
     render(<SettingsPanel view={view()} />)
     expect(screen.getByTestId('settings-gate')).toBeInTheDocument()
+  })
+
+  it('shows the editable Substack actor field with its current value (§17.1)', () => {
+    render(<SettingsPanel view={view()} />)
+    const field = screen.getByLabelText(/substack actor/i)
+    expect(field).toHaveValue('brilliant_gum/substack-insights-scraper')
   })
 
   it('surfaces a save failure instead of silently reporting success', async () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   extractActivityId,
   extractLinkedInSlug,
+  extractSubstackHandle,
   extractTwitterHandle,
   normalizeProfileUrl,
   safeHref,
@@ -121,5 +122,35 @@ describe('extractTwitterHandle', () => {
 
   it('returns null for a bare string containing invalid handle characters', () => {
     expect(extractTwitterHandle('not a handle!')).toBeNull()
+  })
+})
+
+describe('extractSubstackHandle', () => {
+  it('extracts the subdomain from a <pub>.substack.com url', () => {
+    expect(extractSubstackHandle('https://noahpinion.substack.com')).toBe('noahpinion')
+  })
+
+  it('extracts the subdomain ignoring the post path', () => {
+    expect(extractSubstackHandle('https://laraacosta.substack.com/p/the-full-breakdown')).toBe('laraacosta')
+  })
+
+  it('extracts the handle from a substack.com/@handle url', () => {
+    expect(extractSubstackHandle('https://substack.com/@laraacostar')).toBe('laraacostar')
+    expect(extractSubstackHandle('https://www.substack.com/@lara')).toBe('lara')
+  })
+
+  it('tolerates a missing scheme and a trailing slash', () => {
+    expect(extractSubstackHandle('noahpinion.substack.com/')).toBe('noahpinion')
+  })
+
+  it('ignores the www / open system subdomains', () => {
+    expect(extractSubstackHandle('https://www.substack.com')).toBeNull()
+    expect(extractSubstackHandle('https://open.substack.com/pub/x')).toBeNull()
+  })
+
+  it('returns null for non-substack urls and bare handles (Substack is URL-driven)', () => {
+    expect(extractSubstackHandle('https://x.com/lara')).toBeNull()
+    expect(extractSubstackHandle('noahpinion')).toBeNull()
+    expect(extractSubstackHandle('')).toBeNull()
   })
 })

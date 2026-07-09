@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { mapApifyPostToRow, mapApifyTweetToRow } from '@/lib/pure/mappers'
-import type { ApifyPost, ApifyTweet } from '@/lib/types'
+import {
+  isSubstackContent,
+  mapApifyPostToRow,
+  mapApifySubstackToRow,
+  mapApifyTweetToRow,
+  substackNoteHasContent,
+} from '@/lib/pure/mappers'
+import type { ApifyPost, ApifySubstackPost, ApifyTweet } from '@/lib/types'
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 
@@ -201,5 +207,216 @@ describe('mapApifyTweetToRow (Twitter)', () => {
     )
     expect(row.shares).toBe(0)
     expect(row.comments).toBe(0)
+  })
+})
+
+const substackRaw = (over: Partial<ApifySubstackPost> = {}): ApifySubstackPost => ({
+  id: 12345,
+  slug: 'the-full-breakdown',
+  url: 'https://laraacosta.substack.com/p/the-full-breakdown',
+  title: 'The full breakdown',
+  subtitle: 'What I learned this week',
+  bodyMarkdown: 'Long form body here.',
+  publishedAt: '2026-07-06T09:00:00.000Z',
+  publicationHandle: 'laraacosta',
+  publicationName: 'Lara Acosta',
+  reactionCount: 412,
+  commentCount: 37,
+  restackCount: 21,
+  coverImage: 'https://substackcdn.com/cover.png',
+  ...over,
+})
+
+describe('mapApifySubstackToRow (Substack)', () => {
+  it('prefixes the id with substack- to avoid collisions', () => {
+    expect(mapApifySubstackToRow(substackRaw(), 'ai').id).toBe('substack-12345')
+  })
+
+  it('falls back to the slug when the numeric id is absent', () => {
+    expect(mapApifySubstackToRow(substackRaw({ id: undefined }), 'ai').id).toBe('substack-the-full-breakdown')
+  })
+
+  it('throws when neither id nor slug is present', () => {
+    expect(() => mapApifySubstackToRow(substackRaw({ id: undefined, slug: undefined }), 'ai')).toThrow()
+  })
+
+  it('maps the publication handle as the clean author_id and derives author_url', () => {
+    const row = mapApifySubstackToRow(substackRaw(), 'ai')
+    expect(row.author_id).toBe('laraacosta')
+    expect(row.author_name).toBe('Lara Acosta')
+    expect(row.author_type).toBe('profile')
+    expect(row.author_url).toBe('https://laraacosta.substack.com')
+  })
+
+  it('prefers an explicit author name, then publicationName, then the handle', () => {
+    expect(mapApifySubstackToRow(substackRaw({ author: { name: 'Lara A.' } }), 'ai').author_name).toBe('Lara A.')
+    expect(mapApifySubstackToRow(substackRaw({ publicationName: undefined }), 'ai').author_name).toBe('laraacosta')
+  })
+
+  it('prefers an explicit publicationUrl for author_url', () => {
+    const row = mapApifySubstackToRow(substackRaw({ publicationUrl: 'https://custom.domain.com' }), 'ai')
+    expect(row.author_url).toBe('https://custom.domain.com')
+  })
+
+  it('nulls author_url / author_id / author_name gracefully when there is no publication handle', () => {
+    const row = mapApifySubstackToRow(
+      substackRaw({ publicationHandle: undefined, publicationName: undefined }),
+      'ai',
+    )
+    expect(row.author_id).toBeNull()
+    expect(row.author_url).toBeNull()
+    expect(row.author_name).toBeNull()
+  })
+
+  it('nulls content when title, subtitle and body are all absent', () => {
+    const row = mapApifySubstackToRow(
+      substackRaw({ title: null, subtitle: null, bodyMarkdown: null }),
+      'ai',
+    )
+    expect(row.content).toBeNull()
+  })
+
+  it('nulls url when the raw item has none', () => {
+    expect(mapApifySubstackToRow(substackRaw({ url: undefined }), 'ai').url).toBeNull()
+  })
+
+  it('composes content from title, subtitle and body', () => {
+    expect(mapApifySubstackToRow(substackRaw(), 'ai').content).toBe(
+      'The full breakdown\n\nWhat I learned this week\n\nLong form body here.',
+    )
+  })
+
+  it('maps reactions/comments/restacks onto likes/comments/shares (default 0)', () => {
+    const row = mapApifySubstackToRow(substackRaw(), 'ai')
+    expect({ likes: row.likes, comments: row.comments, shares: row.shares }).toEqual({
+      likes: 412,
+      comments: 37,
+      shares: 21,
+    })
+    const bare = mapApifySubstackToRow(
+      substackRaw({ reactionCount: undefined, commentCount: undefined, restackCount: undefined }),
+      'ai',
+    )
+    expect({ likes: bare.likes, comments: bare.comments, shares: bare.shares }).toEqual({
+      likes: 0,
+      comments: 0,
+      shares: 0,
+    })
+  })
+
+  it('normalizes publishedAt to ISO and never throws on a bad/absent date', () => {
+    expect(mapApifySubstackToRow(substackRaw(), 'ai').posted_at).toBe('2026-07-06T09:00:00.000Z')
+    expect(mapApifySubstackToRow(substackRaw({ publishedAt: 'not-a-date' }), 'ai').posted_at).toBeNull()
+    expect(mapApifySubstackToRow(substackRaw({ publishedAt: null }), 'ai').posted_at).toBeNull()
+  })
+
+  it('maps the cover image to image media + thumbnail, or null when absent', () => {
+    const withCover = mapApifySubstackToRow(substackRaw(), 'ai')
+    expect(withCover.image_url).toBe('https://substackcdn.com/cover.png')
+    expect(JSON.parse(withCover.media!)).toEqual({ type: 'image', images: ['https://substackcdn.com/cover.png'] })
+
+    const noCover = mapApifySubstackToRow(substackRaw({ coverImage: null }), 'ai')
+    expect(noCover.image_url).toBeNull()
+    expect(noCover.media).toBeNull()
+  })
+
+  it('sets platform/market/scraped_at and leaves enrichment + x-factor null', () => {
+    const row = mapApifySubstackToRow(substackRaw(), 'ai')
+    expect(row.platform).toBe('substack')
+    expect(row.market).toBe('ai')
+    expect(row.scraped_at).toMatch(ISO_RE)
+    expect(row.is_repost).toBe(0)
+    expect(row.embedding).toBeNull()
+    expect(row.x_factor).toBeNull()
+  })
+
+  it('maps a Substack NOTE record (type:note): real fields authorHandle/authorName/body/createdAt', () => {
+    const note = mapApifySubstackToRow(
+      {
+        type: 'note',
+        kind: 'note',
+        id: '291136901',
+        authorHandle: 'aliciateltz',
+        authorName: 'Alicia Teltz',
+        body: 'a quick note about ai',
+        createdAt: '2026-07-09T11:50:00.000Z',
+        reactionCount: 15,
+        attachmentUrls: ['https://cdn/note-img.png'],
+      },
+      'ai',
+    )
+    expect(note.id).toBe('substack-note-291136901') // distinct prefix from posts (substack-…)
+    expect(note.platform).toBe('substack')
+    expect(note.author_id).toBe('aliciateltz')
+    expect(note.author_name).toBe('Alicia Teltz')
+    expect(note.content).toBe('a quick note about ai')
+    expect(note.url).toBe('https://substack.com/@aliciateltz/note/c-291136901')
+    expect(note.posted_at).toBe('2026-07-09T11:50:00.000Z')
+    expect({ likes: note.likes, comments: note.comments, shares: note.shares }).toEqual({ likes: 15, comments: 0, shares: 0 })
+    expect(note.image_url).toBe('https://cdn/note-img.png')
+    expect(JSON.parse(note.media!)).toEqual({ type: 'image', images: ['https://cdn/note-img.png'] })
+    expect(note.is_repost).toBe(0)
+  })
+
+  it('an image-only note (empty body) still maps: null content, author + image kept', () => {
+    const note = mapApifySubstackToRow(
+      { type: 'note', kind: 'note', id: 'n2', authorHandle: 'lara', authorName: 'Lara', body: '', reactionCount: 10 },
+      'ai',
+    )
+    expect(note.content).toBeNull() // empty body → null (not a blank string)
+    expect(note.author_id).toBe('lara')
+    expect(note.likes).toBe(10)
+  })
+
+  it('a restack note surfaces the boosted article (title as content, link to the article)', () => {
+    const restack = mapApifySubstackToRow(
+      {
+        type: 'note',
+        kind: 'restack',
+        id: 'r9',
+        authorHandle: 'aliciateltz',
+        restackedPost: { title: 'WATCH BACK: Substack Live', url: 'https://dealmakers.substack.com/p/watch-back' },
+      },
+      'ai',
+    )
+    expect(restack.is_repost).toBe(1)
+    expect(restack.content).toBe('WATCH BACK: Substack Live') // the boosted article title as content
+    expect(restack.url).toBe('https://substack.com/@aliciateltz/note/c-r9') // its OWN note url (no collision)
+  })
+
+  it('a bare note (no author handle, no content) is null-safe', () => {
+    const restack = mapApifySubstackToRow({ type: 'note', kind: 'restack', id: 'r1' }, 'ai')
+    expect(restack.id).toBe('substack-note-r1')
+    expect(restack.author_id).toBeNull()
+    expect(restack.author_name).toBeNull()
+    expect(restack.url).toBeNull()
+    expect(restack.content).toBeNull()
+    expect(restack.media).toBeNull()
+  })
+
+  it('note author_name falls back to the handle when authorName is absent', () => {
+    const note = mapApifySubstackToRow({ type: 'note', id: 'n3', authorHandle: 'jantegze' }, 'ai')
+    expect(note.author_name).toBe('jantegze')
+  })
+
+  it('throws on a note with no id', () => {
+    expect(() => mapApifySubstackToRow({ type: 'note', kind: 'note' }, 'ai')).toThrow()
+  })
+
+  it('substackNoteHasContent keeps notes with text/image/restack, drops the truly empty', () => {
+    expect(substackNoteHasContent({ body: 'hi' })).toBe(true)
+    expect(substackNoteHasContent({ attachmentUrls: ['x'] })).toBe(true)
+    expect(substackNoteHasContent({ restackedPost: { title: 't' } })).toBe(true)
+    expect(substackNoteHasContent({ restackedPublication: { name: 'p' } })).toBe(true)
+    expect(substackNoteHasContent({ body: '   ' })).toBe(false) // whitespace-only
+    expect(substackNoteHasContent({})).toBe(false) // nothing displayable
+  })
+
+  it('isSubstackContent keeps posts + notes but rejects author/publication metadata records', () => {
+    expect(isSubstackContent({ type: 'post' })).toBe(true)
+    expect(isSubstackContent({ type: 'note' })).toBe(true)
+    expect(isSubstackContent({})).toBe(true) // no type → treated as a post
+    expect(isSubstackContent({ type: 'author' })).toBe(false) // profile metadata, not content
+    expect(isSubstackContent({ type: 'publication' })).toBe(false)
   })
 })
