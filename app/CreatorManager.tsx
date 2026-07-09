@@ -9,10 +9,11 @@ import { apiFetch } from '@/lib/api-client'
 
 interface Creator {
   id: string
-  platform: 'linkedin' | 'twitter'
+  platform: 'linkedin' | 'twitter' | 'substack'
   profile_url: string
   author_id: string | null
   display_name: string | null
+  persona: string | null // §17.2 the person this account belongs to
   tags: string // JSON array
 }
 
@@ -38,6 +39,7 @@ export function CreatorManager() {
   const [creators, setCreators] = useState<Creator[]>([])
   const [url, setUrl] = useState('')
   const [tags, setTags] = useState('')
+  const [person, setPerson] = useState('')
   const [bulk, setBulk] = useState('')
   const [showBulk, setShowBulk] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -64,10 +66,15 @@ export function CreatorManager() {
       await apiFetch('/api/creators', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ inputs: [input], tags: parseTags(tags) }),
+        body: JSON.stringify({
+          inputs: [input],
+          tags: parseTags(tags),
+          ...(person.trim() && { persona: person.trim() }),
+        }),
       })
       setUrl('')
       setTags('')
+      setPerson('')
       await load()
     } catch (e) {
       fail(e)
@@ -158,6 +165,14 @@ export function CreatorManager() {
           Tags
           <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="ai, founder" />
         </label>
+        <label>
+          Person
+          <input
+            value={person}
+            onChange={(e) => setPerson(e.target.value)}
+            placeholder="auto from name — set to link accounts"
+          />
+        </label>
         <button type="button" onClick={add}>
           Add
         </button>
@@ -167,8 +182,10 @@ export function CreatorManager() {
         {creators.map((c) => (
           <li key={c.id} className="creators__row">
             <span className="creators__name">{nameOf(c)}</span>
+            <span className={`badge badge--platform badge--${c.platform}`}>{c.platform}</span>
             <span className="creators__slug">{c.profile_url}</span>
             <span className="creators__tags">
+              {c.persona && <span className="chip chip--person" title="person (links accounts across platforms)">👤 {c.persona}</span>}
               {parseTagChips(c.tags).map((t) => (
                 <span key={t} className="chip chip--tag">
                   {t}

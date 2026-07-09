@@ -13,20 +13,28 @@ import {
 import { findContentClusters } from '@/lib/pure/content-clusters'
 import { findSimilarImageGroups } from '@/lib/pure/image-groups'
 import { isPostMedia } from '@/lib/pure/media'
-import type { PostMedia, PostRow, SortMode, Timeframe } from '@/lib/types'
+import type { Platform, PostMedia, PostRow, SortMode, Timeframe } from '@/lib/types'
 
 // Reads the live DB — never statically prerender/cache.
 export const dynamic = 'force-dynamic'
 
-const PLATFORMS = ['all', 'linkedin', 'twitter'] as const
+const VALID_PLATFORMS: readonly Platform[] = ['linkedin', 'twitter', 'substack']
 const TIMEFRAMES: readonly Timeframe[] = ['all', '24h', '3d', 'week', 'month', '3months', 'custom']
 const SORTS: readonly SortMode[] = ['recent', 'likes', 'xfactor']
 
 /** Return `raw` only if it's one of `allowed`, else undefined — so an unknown enum param is ignored,
- *  not blindly trusted. An invalid `timeframe` would otherwise crash the date math; a bad `platform`
- *  would silently filter out every row. */
+ *  not blindly trusted. An invalid `timeframe` would otherwise crash the date math. */
 function oneOf<T extends string>(allowed: readonly T[], raw: string | null): T | undefined {
   return raw !== null && (allowed as readonly string[]).includes(raw) ? (raw as T) : undefined
+}
+
+/** Parse the `platform` param as a comma-separated subset (§17.4). 'all', empty, unknown-only, or the
+ *  full set → undefined (no platform filter). Unknown tokens are dropped, not trusted. */
+function parsePlatforms(raw: string | null): Platform[] | undefined {
+  if (!raw) return undefined
+  const tokens = raw.split(',').map((s) => s.trim().toLowerCase())
+  const valid = [...new Set(tokens.filter((t): t is Platform => (VALID_PLATFORMS as readonly string[]).includes(t)))]
+  return valid.length === 0 || valid.length === VALID_PLATFORMS.length ? undefined : valid
 }
 
 /** Parse the shared filter set from the query string (PRD §11.1). */
@@ -40,7 +48,7 @@ function parseFilters(sp: URLSearchParams): PostFilters {
     return parts && parts.length > 0 ? parts : undefined
   }
   return {
-    platform: oneOf(PLATFORMS, sp.get('platform')),
+    platforms: parsePlatforms(sp.get('platform')),
     keywords: list('keywords'),
     authors: list('authors'),
     minLikes: num('minLikes'),

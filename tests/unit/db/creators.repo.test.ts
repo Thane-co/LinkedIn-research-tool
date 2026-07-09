@@ -40,6 +40,17 @@ describe('upsertCreator', () => {
     expect(updated.display_name).toBe('Jane D.')
     expect(updated.avatar_url).toBe('https://img/j')
   })
+
+  it('stores the persona label (§17.2) and defaults it to null', () => {
+    expect(upsertCreator(jane()).persona).toBeNull()
+    expect(upsertCreator(jane({ profile_url: 'https://li/p', persona: 'lara acosta' })).persona).toBe('lara acosta')
+  })
+
+  it('COALESCEs persona on re-add: a new value overrides, an omitted one is preserved', () => {
+    upsertCreator(jane({ persona: 'lara acosta' }))
+    expect(upsertCreator(jane({ persona: null })).persona).toBe('lara acosta') // omitted → kept
+    expect(upsertCreator(jane({ persona: 'l acosta' })).persona).toBe('l acosta') // provided → wins
+  })
 })
 
 

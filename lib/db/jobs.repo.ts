@@ -68,9 +68,11 @@ export function getJob(id: string): ScrapeJobRow | null {
   )
 }
 
-/** Most-recent scrape runs, newest-first (Layer 6 — scrape history, §11.6). */
+/** Most-recent scrape runs, newest-first (Layer 6 — scrape history, §11.6). The `rowid` tie-break
+ *  keeps the order deterministic when two jobs share a `started_at` (same-ms creation), so "newest
+ *  first" holds for jobs created within the same millisecond (insertion order = newest last). */
 export function listRecentJobs(limit = 20): ScrapeJobRow[] {
   return getDb()
-    .prepare(`SELECT ${COLUMNS} FROM scrape_jobs ORDER BY started_at DESC LIMIT ?`)
+    .prepare(`SELECT ${COLUMNS} FROM scrape_jobs ORDER BY started_at DESC, rowid DESC LIMIT ?`)
     .all(limit) as ScrapeJobRow[]
 }

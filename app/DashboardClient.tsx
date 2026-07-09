@@ -32,7 +32,7 @@ interface PostsResponse {
 }
 
 export const DEFAULT_FILTERS: Filters = {
-  platform: 'all',
+  platforms: [], // empty = all platforms (§17.4)
   keywords: [],
   authors: [],
   minLikes: 0,
@@ -49,7 +49,7 @@ export const DEFAULT_FILTERS: Filters = {
 
 export function toQuery(f: Filters): string {
   const p = new URLSearchParams()
-  if (f.platform !== 'all') p.set('platform', f.platform)
+  if (f.platforms.length) p.set('platform', f.platforms.join(',')) // empty = all (§17.4)
   if (f.keywords.length) p.set('keywords', f.keywords.join(','))
   if (f.authors.length) p.set('authors', f.authors.join(','))
   if (f.minLikes) p.set('minLikes', String(f.minLikes))

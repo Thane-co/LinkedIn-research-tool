@@ -31,6 +31,11 @@ describe('PostCard', () => {
     expect(screen.getByText(/both/i)).toBeInTheDocument()
   })
 
+  it('renders the Substack platform badge for a Substack post (§17.1)', () => {
+    render(<PostCard post={makePost({ platform: 'substack' })} />)
+    expect(screen.getByText(/substack/i)).toBeInTheDocument()
+  })
+
   it('links to the original post (new tab) and has no selection checkbox', () => {
     render(<PostCard post={makePost({ url: 'https://www.linkedin.com/feed/update/urn:li:activity:99/' })} />)
     const link = screen.getByRole('link', { name: /open the original post/i })

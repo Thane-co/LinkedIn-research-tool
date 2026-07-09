@@ -56,11 +56,12 @@ CREATE INDEX IF NOT EXISTS posts_unembedded_idx       ON posts(embedded_at) WHER
 -- 6.2 creators --------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS creators (
   id            TEXT PRIMARY KEY,              -- crypto.randomUUID()
-  platform      TEXT NOT NULL,                 -- 'linkedin' | 'twitter'
-  profile_url   TEXT NOT NULL,                 -- normalized profile url (LinkedIn) or https://x.com/<handle>
+  platform      TEXT NOT NULL,                 -- 'linkedin' | 'twitter' | 'substack'
+  profile_url   TEXT NOT NULL,                 -- normalized profile url (LinkedIn/X) or https://<pub>.substack.com
   author_id     TEXT,                          -- clean slug/handle for x-factor matching
   display_name  TEXT,
   avatar_url    TEXT,
+  persona       TEXT,                          -- §17: the PERSON this account belongs to (normalized name key)
   tier          TEXT NOT NULL DEFAULT 'core',  -- every creator is 'core' (the scrape set); retained for that filter
   tags          TEXT NOT NULL DEFAULT '[]',    -- JSON array of strings
   market        TEXT NOT NULL DEFAULT 'ai',
@@ -70,6 +71,8 @@ CREATE TABLE IF NOT EXISTS creators (
   UNIQUE(profile_url)
 );
 CREATE INDEX IF NOT EXISTS creators_tier_idx ON creators(tier);
+-- NOTE: creators_persona_idx is created in db.ts AFTER the additive-column migration (persona may be
+-- absent on a legacy db when this file runs, which would make an index-on-persona here fail).
 
 -- 6.3 scrape_jobs -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS scrape_jobs (

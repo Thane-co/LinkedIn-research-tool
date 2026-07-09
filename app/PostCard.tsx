@@ -10,7 +10,7 @@ import type { PostMedia } from '@/lib/types'
 
 export interface PostCardPost {
   id: string
-  platform: 'linkedin' | 'twitter'
+  platform: 'linkedin' | 'twitter' | 'substack'
   url: string | null
   content: string | null
   author_name: string | null

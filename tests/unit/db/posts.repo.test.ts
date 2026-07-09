@@ -72,6 +72,20 @@ describe('searchPosts — filters', () => {
     expect(searchPosts({ platform: 'all' }).total).toBe(2)
   })
 
+  it('filters by a platform subset (§17.4): platform IN (…)', () => {
+    seed([
+      { id: 'l', platform: 'linkedin' },
+      { id: 't', platform: 'twitter' },
+      { id: 's', platform: 'substack' },
+    ])
+    // "Substack + LinkedIn" but not Twitter
+    expect(searchPosts({ platforms: ['substack', 'linkedin'] }).posts.map((p) => p.id).sort()).toEqual(['l', 's'])
+    // a single-element subset behaves like the old single filter
+    expect(searchPosts({ platforms: ['substack'] }).posts.map((p) => p.id)).toEqual(['s'])
+    // an empty subset applies no platform filter (all)
+    expect(searchPosts({ platforms: [] }).total).toBe(3)
+  })
+
   it('matches keywords against content case-insensitively (OR across terms)', () => {
     seed([
       { id: 'a', content: 'The future of AI agents' },
@@ -224,9 +238,36 @@ describe('clustering candidates + author history', () => {
 
     const authors = getAvailableAuthors({})
     expect(authors).toEqual([
-      { author_id: 'jane', author_name: 'Jane', avatar: 'https://img/jane.png', isCore: true },
-      { author_id: 'joe', author_name: 'Joe', avatar: null, isCore: false },
+      { author_id: 'jane', author_name: 'Jane', platform: 'linkedin', avatar: 'https://img/jane.png', isCore: true, persona: null },
+      { author_id: 'joe', author_name: 'Joe', platform: 'twitter', avatar: null, isCore: false, persona: null },
     ])
+  })
+
+  it('getAvailableAuthors collapses handle/display-name variants of one account into a single row', () => {
+    // The same account accrues posts under both its real name and its bare handle; the dropdown must
+    // show ONE row, preferring the human-looking name (has a space or capital) over the handle.
+    seed([
+      { id: 'a', author_id: 'aliciateltz', author_name: 'aliciateltz', platform: 'substack' },
+      { id: 'b', author_id: 'aliciateltz', author_name: 'aliciateltz', platform: 'substack' },
+      { id: 'c', author_id: 'aliciateltz', author_name: 'Alicia Teltz', platform: 'substack' },
+    ])
+    const authors = getAvailableAuthors({})
+    expect(authors).toEqual([
+      { author_id: 'aliciateltz', author_name: 'Alicia Teltz', platform: 'substack', avatar: null, isCore: false, persona: null },
+    ])
+  })
+
+  it('getAvailableAuthors carries the creator persona so the dropdown can group by person (§17.3)', () => {
+    seed([
+      { id: 'a', author_id: 'lara-li', author_name: 'Lara Acosta', platform: 'linkedin' },
+      { id: 'b', author_id: 'laraacosta', author_name: 'Lara Acosta', platform: 'substack' },
+    ])
+    upsertCreator({ platform: 'linkedin', profile_url: 'https://li/in/lara', author_id: 'lara-li', persona: 'lara acosta' })
+    upsertCreator({ platform: 'substack', profile_url: 'https://laraacosta.substack.com', author_id: 'laraacosta', persona: 'lara acosta' })
+
+    const byId = Object.fromEntries(getAvailableAuthors({}).map((a) => [a.author_id, a.persona]))
+    expect(byId['lara-li']).toBe('lara acosta')
+    expect(byId['laraacosta']).toBe('lara acosta') // both accounts share the persona
   })
 
   it('getAvailableAuthors applies non-author filters but ignores the author include-list', () => {

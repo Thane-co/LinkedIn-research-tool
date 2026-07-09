@@ -40,6 +40,30 @@ describe('POST /api/creators', () => {
     expect(jane.profile_url).toBe('https://x.com/janedev')
   })
 
+  it('adds a Substack creator from a publication url, deriving the handle + persona (§17)', async () => {
+    insertPosts([makePostRow({ id: 'ps', author_id: 'laraacosta', author_name: 'Lara Acosta', platform: 'substack' })])
+    const { creators } = await (
+      await POST(postJson({ input: 'https://laraacosta.substack.com/p/the-breakdown' }))
+    ).json()
+    const lara = creators.find((c: { author_id: string }) => c.author_id === 'laraacosta')
+    expect(lara.platform).toBe('substack')
+    expect(lara.profile_url).toBe('https://laraacosta.substack.com') // canonicalized to the publication root
+    expect(lara.persona).toBe('lara acosta') // auto-matched from the display name
+  })
+
+  it('links a person across platforms: auto-match by name, with an explicit persona override', async () => {
+    insertPosts([makePostRow({ id: 'p1', author_id: 'lara-li', author_name: 'Lara Acosta', platform: 'linkedin' })])
+    await POST(postJson({ input: 'https://www.linkedin.com/in/lara-li' })) // persona auto-derived
+    // the Substack account has no post yet (no display name) → pass an explicit persona to link it
+    const { creators } = await (
+      await POST(postJson({ input: 'https://laraacosta.substack.com', persona: 'lara acosta' }))
+    ).json()
+    const personas = creators
+      .filter((c: { author_id: string }) => ['lara-li', 'laraacosta'].includes(c.author_id))
+      .map((c: { persona: string | null }) => c.persona)
+    expect(personas).toEqual(['lara acosta', 'lara acosta']) // both accounts = one person
+  })
+
   it('auto-fills display_name from an existing post by that author', async () => {
     insertPosts([makePostRow({ id: 'p1', author_id: 'jane-doe', author_name: 'Jane Doe' })])
     const { creators } = await (

@@ -5,6 +5,8 @@ import { setSettings } from '@/lib/settings'
 import {
   buildLinkedInCreatorInput,
   buildLinkedInKeywordInput,
+  buildSubstackCreatorInput,
+  buildSubstackKeywordInput,
   buildTwitterCreatorInput,
   buildTwitterKeywordInput,
   runActor,
@@ -27,11 +29,22 @@ describe('input builders (pure)', () => {
     expect(typeof input.postedLimit).toBe('string')
   })
 
-  it('LinkedIn creator: profileUrls + date sort + a per-profile cap', () => {
+  it('LinkedIn creator: profileUrls + date sort + a per-profile cap + a DATE bound (postedLimit)', () => {
     const input = buildLinkedInCreatorInput(['https://li/in/jane'], 'month') as Record<string, unknown>
     expect(input.profileUrls).toEqual(['https://li/in/jane'])
     expect(input.sortBy).toBe('date')
     expect(typeof input.maxPostsPerProfile).toBe('number')
+    expect(input.postedLimit).toBe('month') // bounds by date, not just count (no re-paying for old posts)
+  })
+
+  it('LinkedIn creator: maps each timeframe to the profile actor postedLimit enum', () => {
+    const limitFor = (tf: Parameters<typeof buildLinkedInCreatorInput>[1]): unknown =>
+      (buildLinkedInCreatorInput(['u'], tf) as Record<string, unknown>).postedLimit
+    expect(limitFor('week')).toBe('week')
+    expect(limitFor('24h')).toBe('24h')
+    expect(limitFor('3d')).toBe('week') // no 3-day option on the actor
+    expect(limitFor('3months')).toBe('3months')
+    expect(limitFor('all')).toBe('any')
   })
 
   it('Twitter keyword: searchTerms + Top sort + maxItems 200, optional filters passed through', () => {
@@ -59,6 +72,52 @@ describe('input builders (pure)', () => {
     const input = buildTwitterKeywordInput(['ai']) as Record<string, unknown>
     expect('minimumFavorites' in input).toBe(false)
     expect('start' in input).toBe(false)
+  })
+
+  it('Substack keyword: searchQueries + maxSearchResults + a per-publication cap', () => {
+    const input = buildSubstackKeywordInput(['ai agents'], 'week') as Record<string, unknown>
+    expect(input.searchQueries).toEqual(['ai agents'])
+    expect(input.maxSearchResults).toBe(25)
+    expect(typeof input.maxPostsPerPublication).toBe('number')
+  })
+
+  it('Substack creator: posts-only by default (publicationHandles, NO notes/userHandles)', () => {
+    const input = buildSubstackCreatorInput(['laraacosta'], 'month') as Record<string, unknown>
+    expect(input.publicationHandles).toEqual(['laraacosta']) // articles/posts
+    expect(typeof input.maxPostsPerPublication).toBe('number')
+    expect('userHandles' in input).toBe(false) // Notes are opt-in (slower)
+    expect('maxNotesPerAuthor' in input).toBe(false)
+    expect('searchQueries' in input).toBe(false)
+    expect('urls' in input).toBe(false) // a user-profile url returns nothing; target by handle
+  })
+
+  it('Substack creator: includeNotes sets the actor flag + userHandles (Notes) feed + its cap', () => {
+    const input = buildSubstackCreatorInput(['laraacosta'], 'month', { includeNotes: true }) as Record<string, unknown>
+    expect(input.userHandles).toEqual(['laraacosta'])
+    expect(input.includeNotes).toBe(true) // the actor's own flag — without it, no notes are scraped
+    expect(typeof input.maxNotesPerAuthor).toBe('number')
+  })
+
+  it('Substack creator "all" = full history: caps at the actor ceiling (500) with no date bound', () => {
+    const input = buildSubstackCreatorInput(['laraacosta'], 'all', { includeNotes: true }) as Record<string, unknown>
+    expect(input.maxPostsPerPublication).toBe(500)
+    expect(input.maxNotesPerAuthor).toBe(500)
+    expect('dateFrom' in input).toBe(false)
+  })
+
+  it('Substack: passes optional date range + minReactions through, omits them otherwise', () => {
+    const withOpts = buildSubstackKeywordInput(['ai'], 'week', {
+      dateFrom: '2026-06-01',
+      dateTo: '2026-06-30',
+      minReactions: 100,
+    }) as Record<string, unknown>
+    expect(withOpts.dateFrom).toBe('2026-06-01')
+    expect(withOpts.dateTo).toBe('2026-06-30')
+    expect(withOpts.minReactions).toBe(100)
+
+    const bare = buildSubstackCreatorInput(['laraacosta'], 'week') as Record<string, unknown>
+    expect('dateFrom' in bare).toBe(false)
+    expect('minReactions' in bare).toBe(false)
   })
 })
 

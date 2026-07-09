@@ -1,7 +1,7 @@
 // Layer 1 — shared TypeScript types (PRD §12 step 11).
 // Mirrors the SQLite schema (PRD §6) and the pure-logic I/O shapes.
 
-export type Platform = 'linkedin' | 'twitter'
+export type Platform = 'linkedin' | 'twitter' | 'substack'
 export type ScrapeSource = 'keyword' | 'creator' | 'both'
 export type ScrapeMode = 'keyword' | 'creator' | 'both'
 export type JobStatus = 'running' | 'succeeded' | 'failed'
@@ -54,6 +54,9 @@ export interface CreatorRow {
   author_id: string | null
   display_name: string | null
   avatar_url: string | null
+  // §17: the PERSON this account belongs to (normalized name key). Accounts sharing a persona are the
+  // same person across platforms. Auto-derived from display_name, manually overridable.
+  persona: string | null
   tier: CreatorTier
   tags: string // JSON array of strings
   market: string
@@ -129,6 +132,40 @@ export interface ApifyTweet {
   retweetCount?: number
   replyCount?: number
   isRetweet?: boolean
+  [key: string]: unknown
+}
+
+// Substack record (PRD §10.3, §17). Covers BOTH a post/article and a Note — they share engagement
+// fields but a note has `type:'note'`, no title/body-markdown, and a `handle` (author) instead of a
+// publicationHandle. Field names from the actor's documented output schema; raw_data preserves the rest.
+export interface ApifySubstackPost {
+  type?: string // 'post' | 'note' (absent → treated as a post); also 'author'/'publication' metadata
+  kind?: string // notes only: 'note' (original) | 'restack' (boost of another's post)
+  id?: string | number
+  slug?: string
+  url?: string
+  title?: string | null
+  subtitle?: string | null
+  bodyMarkdown?: string | null
+  bodyText?: string | null
+  publishedAt?: string | null
+  publicationHandle?: string
+  publicationName?: string
+  publicationUrl?: string
+  author?: { name?: string }
+  reactionCount?: number
+  commentCount?: number
+  restackCount?: number
+  coverImage?: string | null
+  // --- Note-record fields (type:'note'), confirmed from a real run ---
+  authorHandle?: string
+  authorName?: string
+  createdAt?: string | null
+  body?: string | null
+  attachmentUrls?: string[]
+  // restack notes (kind:'restack') boost an article — no body, but the boosted post is here:
+  restackedPost?: { title?: string; url?: string; slug?: string }
+  restackedPublication?: { name?: string; handle?: string }
   [key: string]: unknown
 }
 

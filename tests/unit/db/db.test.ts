@@ -73,6 +73,29 @@ describe('migrate', () => {
     migrate(db)
     expect(db.prepare("SELECT value FROM settings WHERE key = 'apify_api_token'").get()).toBeUndefined()
   })
+
+  it('migrates a legacy creators table (no persona column) additively without error (§17.2)', () => {
+    // Simulate a db created before the persona column: a minimal legacy creators table.
+    const db = new Database(':memory:')
+    db.exec(`CREATE TABLE creators (
+      id TEXT PRIMARY KEY, platform TEXT NOT NULL, profile_url TEXT NOT NULL, author_id TEXT,
+      display_name TEXT, avatar_url TEXT, tier TEXT NOT NULL DEFAULT 'core',
+      tags TEXT NOT NULL DEFAULT '[]', market TEXT NOT NULL DEFAULT 'ai', notes TEXT,
+      added_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(profile_url)
+    )`)
+    db.prepare(
+      "INSERT INTO creators (id, platform, profile_url, added_at, updated_at) VALUES ('c1','linkedin','https://li/x','t','t')",
+    ).run()
+
+    // The persona index must be created AFTER the ALTER adds the column, or this would throw.
+    expect(() => migrate(db)).not.toThrow()
+    const cols = (db.prepare('PRAGMA table_info(creators)').all() as { name: string }[]).map((c) => c.name)
+    expect(cols).toContain('persona')
+    expect(indexNames(db)).toContain('creators_persona_idx')
+    // the pre-existing row survives with a null persona
+    expect(db.prepare("SELECT persona FROM creators WHERE id='c1'").get()).toEqual({ persona: null })
+    expect(() => migrate(db)).not.toThrow() // still idempotent
+  })
 })
 
 describe('getDb', () => {

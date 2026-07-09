@@ -4,9 +4,12 @@
 // matches on author_id NOT author_url.
 
 import { enrichPosts } from '@/jobs/enrich'
+import { TIMEFRAME_DAYS } from '@/lib/config'
 import {
   buildLinkedInCreatorInput,
   buildLinkedInKeywordInput,
+  buildSubstackCreatorInput,
+  buildSubstackKeywordInput,
   buildTwitterCreatorInput,
   buildTwitterKeywordInput,
   runActor,
@@ -21,10 +24,21 @@ import {
 } from '@/lib/db/posts.repo'
 import { mergeAndDeduplicate } from '@/lib/pure/dedup'
 import { isLikelyNonEnglish } from '@/lib/pure/lang'
-import { mapApifyPostToRow, mapApifyTweetToRow } from '@/lib/pure/mappers'
+import { isSubstackContent, mapApifyPostToRow, mapApifySubstackToRow, mapApifyTweetToRow } from '@/lib/pure/mappers'
 import { computeXFactor, weightedScore } from '@/lib/pure/x-factor'
 import { getSettings } from '@/lib/settings'
-import type { ApifyPost, ApifyTweet, Platform, PostRow, ScrapeStats, Timeframe } from '@/lib/types'
+import { fetchSubstackNoteContent } from '@/lib/substack'
+import type {
+  ApifyPost,
+  ApifySubstackPost,
+  ApifyTweet,
+  Platform,
+  PostRow,
+  ScrapeStats,
+  Timeframe,
+} from '@/lib/types'
+
+type RawItem = ApifyPost | ApifyTweet | ApifySubstackPost
 
 export interface RunScrapeOptions {
   platforms: Platform[]
@@ -33,6 +47,7 @@ export interface RunScrapeOptions {
   creatorIds?: string[]
   timeframe: Timeframe
   market: string
+  includeNotes?: boolean // Substack: also scrape the Notes feed (§17). Off by default.
   // The API route creates the scrape_jobs row up front so it can return the id immediately (PRD
   // §10.6) and then fire runScrape without awaiting. When absent, runScrape creates its own job.
   jobId?: string
@@ -48,6 +63,17 @@ interface ActorRun {
 
 // Drain up to this many unembedded posts after a scrape (Voyage batches internally at 100).
 const ENRICH_LIMIT = 200
+const DAY_MS = 24 * 60 * 60 * 1000
+
+// Substack's actor bounds by an absolute date (dateFrom), not a relative enum — so compute the cutoff
+// here (Layer 3 may read the clock; the pure builders stay time-free). Returns a YYYY-MM-DD string, or
+// undefined for 'all'/'custom' (no bound). Mirrors the LinkedIn creator postedLimit so a "week" scrape
+// only fetches the last week and doesn't re-pay for older posts (§17).
+function timeframeDateFrom(timeframe: Timeframe): string | undefined {
+  const days = (TIMEFRAME_DAYS as Record<string, number>)[timeframe]
+  if (!days) return undefined
+  return new Date(Date.now() - days * DAY_MS).toISOString().slice(0, 10)
+}
 const ZERO_STATS: ScrapeStats = {
   keyword_raw: 0,
   creator_raw: 0,
@@ -85,7 +111,7 @@ function planRuns(opts: RunScrapeOptions): ActorRun[] {
       if (wantCreator && urls.length > 0 && profileActor) {
         runs.push({ source: 'creator', platform, actorId: profileActor, input: buildLinkedInCreatorInput(urls, opts.timeframe) })
       }
-    } else {
+    } else if (platform === 'twitter') {
       // Twitter uses ONE actor for both modes; only the input shape differs (CLAUDE.md invariant).
       const tweetActor = settings.apify_tweet_actor_id
       if (wantKeyword && keywords.length > 0 && tweetActor) {
@@ -95,20 +121,77 @@ function planRuns(opts: RunScrapeOptions): ActorRun[] {
       if (wantCreator && handles.length > 0 && tweetActor) {
         runs.push({ source: 'creator', platform, actorId: tweetActor, input: buildTwitterCreatorInput(handles) })
       }
+    } else {
+      // Substack likewise uses ONE actor for both modes (§17.1); creator mode targets publication urls.
+      // dateFrom bounds the fetch by date so a short timeframe doesn't re-pull old posts.
+      const substackActor = settings.apify_substack_actor_id
+      const dateFrom = timeframeDateFrom(opts.timeframe)
+      if (wantKeyword && keywords.length > 0 && substackActor) {
+        runs.push({ source: 'keyword', platform, actorId: substackActor, input: buildSubstackKeywordInput(keywords, opts.timeframe, { dateFrom }) })
+      }
+      // Target publications by their bare handle (author_id), NOT the profile url — the actor scrapes
+      // publications, and a substack.com/@handle profile url returns nothing (§17.1).
+      const handles = creators.filter((c) => c.platform === 'substack').map((c) => c.author_id).filter((h): h is string => !!h)
+      if (wantCreator && handles.length > 0 && substackActor) {
+        runs.push({ source: 'creator', platform, actorId: substackActor, input: buildSubstackCreatorInput(handles, opts.timeframe, { dateFrom, includeNotes: opts.includeNotes }) })
+      }
     }
   }
   return runs
 }
 
+const NOTE_BACKFILL_CONCURRENCY = 6
+
+/** A Substack note row that carries nothing to render even after backfill (drop it, don't insert). */
+function isDeadNote(r: PostRow): boolean {
+  return r.id.startsWith('substack-note-') && !r.content && !r.image_url
+}
+
+/**
+ * Backfill Substack notes the actor returned empty (post-share / quote notes) from the public reader
+ * API (§17): pull the referenced article's title/subtitle/cover/url onto the row. Concurrency-limited
+ * and fully non-fatal — a note that can't be backfilled stays empty and is dropped by isDeadNote.
+ */
+async function backfillEmptySubstackNotes(rows: PostRow[]): Promise<void> {
+  const empties = rows.filter((r) => r.id.startsWith('substack-note-') && !r.content && !r.image_url)
+  for (let i = 0; i < empties.length; i += NOTE_BACKFILL_CONCURRENCY) {
+    await Promise.all(
+      empties.slice(i, i + NOTE_BACKFILL_CONCURRENCY).map(async (r) => {
+        const enr = await fetchSubstackNoteContent(r.id.replace('substack-note-', ''))
+        if (!enr) return
+        if (enr.content) r.content = enr.content
+        if (enr.imageUrl) {
+          r.image_url = enr.imageUrl
+          r.media = JSON.stringify({ type: 'image', images: [enr.imageUrl] })
+        }
+        // note keeps its own url (r.url) — the article's url would collide with the scraped post
+      }),
+    )
+  }
+}
+
+/** Map one raw item to a PostRow by platform (throws on missing id — caught by the caller). */
+function mapItem(raw: RawItem, platform: Platform, market: string): PostRow {
+  switch (platform) {
+    case 'linkedin':
+      return mapApifyPostToRow(raw as ApifyPost, market)
+    case 'twitter':
+      return mapApifyTweetToRow(raw as ApifyTweet, market)
+    default:
+      return mapApifySubstackToRow(raw as ApifySubstackPost, market)
+  }
+}
+
 /** Map a raw dataset to rows: skip non-English and any item without a derivable id (non-fatal). */
-function mapItems(items: (ApifyPost | ApifyTweet)[], platform: Platform, market: string): PostRow[] {
+function mapItems(items: RawItem[], platform: Platform, market: string): PostRow[] {
   const out: PostRow[] = []
   for (const raw of items) {
+    // Substack's userHandles input also returns author/publication metadata records — skip those;
+    // they carry no post content and would land as blank rows (§17). Empty notes are NOT skipped here:
+    // they may be post-share/quote notes we can backfill from the reader API (backfillEmptySubstackNotes).
+    if (platform === 'substack' && !isSubstackContent(raw as ApifySubstackPost)) continue
     try {
-      const row =
-        platform === 'linkedin'
-          ? mapApifyPostToRow(raw as ApifyPost, market)
-          : mapApifyTweetToRow(raw as ApifyTweet, market)
+      const row = mapItem(raw, platform, market)
       if (isLikelyNonEnglish(row.content)) continue
       out.push(row)
     } catch (err) {
@@ -144,7 +227,7 @@ export async function runScrape(opts: RunScrapeOptions): Promise<ScrapeStats> {
           return { run, ok: true as const, items }
         } catch (err) {
           console.error(`scrape: actor ${run.actorId} (${run.platform}/${run.source}) failed:`, (err as Error).message)
-          return { run, ok: false as const, items: [] as (ApifyPost | ApifyTweet)[], error: err as Error }
+          return { run, ok: false as const, items: [] as RawItem[], error: err as Error }
         }
       }),
     )
@@ -168,7 +251,13 @@ export async function runScrape(opts: RunScrapeOptions): Promise<ScrapeStats> {
       ;(r.run.source === 'keyword' ? keywordRows : creatorRows).push(...mapped)
     }
 
-    const { posts, duplicates, foundInBoth } = mergeAndDeduplicate(keywordRows, creatorRows)
+    // Backfill empty Substack notes (post-share/quote notes) from the reader API, then drop any note
+    // that is still blank afterward — so no empty note cards, and shares/quotes show their article.
+    await backfillEmptySubstackNotes(creatorRows)
+    const keywordClean = keywordRows.filter((r) => !isDeadNote(r))
+    const creatorClean = creatorRows.filter((r) => !isDeadNote(r))
+
+    const { posts, duplicates, foundInBoth } = mergeAndDeduplicate(keywordClean, creatorClean)
     const existing = findExistingIds(posts.map((p) => p.id))
     const newRows = posts.filter((p) => !existing.has(p.id))
     const { inserted } = insertPosts(newRows)
