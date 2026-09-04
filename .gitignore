@@ -36,3 +36,6 @@ npm-debug.log*
 snapshot.db
 snapshot.db-wal
 snapshot.db-shm
+
+# Agent server build output (separate from .next so `next dev` cannot clobber it)
+.next-agent

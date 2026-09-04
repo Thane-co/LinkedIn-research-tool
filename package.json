@@ -11,8 +11,8 @@
     "dev": "next dev -H 127.0.0.1",
     "build": "next build",
     "start": "next start -H 127.0.0.1",
-    "start:agent": "READONLY_SERVER=1 next start -H 127.0.0.1 -p 3100",
-    "start:snapshot": "DB_PATH=./snapshot.db READONLY_SERVER=1 next start -H 127.0.0.1 -p 3100",
+    "start:agent": "npm run build:agent && NEXT_DIST_DIR=.next-agent READONLY_SERVER=1 next start -H 127.0.0.1 -p 3100",
+    "start:snapshot": "npm run build:agent && NEXT_DIST_DIR=.next-agent DB_PATH=./snapshot.db READONLY_SERVER=1 next start -H 127.0.0.1 -p 3100",
     "tunnel": "cloudflared tunnel --url http://127.0.0.1:3100",
     "api:token": "node scripts/api-token.mjs",
     "snapshot": "node scripts/export-snapshot.mjs",
@@ -20,7 +20,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "build:agent": "NEXT_DIST_DIR=.next-agent next build"
   },
   "dependencies": {
     "apify-client": "^2.9.3",

@@ -1713,3 +1713,14 @@ host, so an agent that does not run on this machine can query it without exposin
 - The script **refuses to write** a snapshot that still carries `raw_data` or any extra setting.
 - Deployment runbook: `docs/deploy-vps.md`. Bind the remote instance to `127.0.0.1` so only processes
   on that host can reach it.
+
+### 20.6 Separate build directory for the agent server
+`next.config.js` sets `distDir: process.env.NEXT_DIST_DIR || '.next'`, and the agent scripts build
+into `.next-agent`.
+
+`next dev` — required to scrape, since the dashboard is the only way to launch a scrape — rewrites
+`.next` as a DEVELOPMENT build with no `BUILD_ID`. `next start` then fails with "Could not find a
+production build", so simply opening the dashboard silently broke the agent server. Separate
+directories let the dashboard and the read-only agent server run simultaneously without clobbering
+each other. `start:agent` / `start:snapshot` also build first, so a stale agent build can't be
+served after a code change.
