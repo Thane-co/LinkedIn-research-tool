@@ -60,6 +60,7 @@ Terminal windows, and it does not disturb Hermes, which invokes its own Node by 
 ## Step 1 — Build the snapshot 🖥️ MAC
 
 ```bash
+export PATH="$HOME/.nvm/versions/node/v20.20.2/bin:$PATH"
 cd "/Users/basia/Projects/Linkedin Tool/LinkedIn-research-tool"
 npm run snapshot
 ```
@@ -86,8 +87,9 @@ Remote read-only token (separate from your local one):
 what Hermes will authenticate with. It's different from your local token on purpose: revoking one
 never affects the other.
 
-> If you ever need to see it again: it's inside the snapshot, not your main database. Easiest is to
-> rebuild with `npm run snapshot -- --token YOUR_SAVED_TOKEN` to force a known value.
+> If you lose it: it lives inside `snapshot.db`, not your main database. Easiest is to rebuild with a
+> value you choose — `npm run snapshot -- --token YOUR_SAVED_TOKEN` — rather than trying to read it
+> back out.
 
 ---
 
@@ -104,6 +106,10 @@ You're in when the prompt changes to something like `root@srv123:~#`.
 
 **Leave this window open.** Every ☁️ VPS command goes here. Open a *second* Terminal window for the
 🖥️ MAC commands, so you don't have to keep reconnecting.
+
+> Each new Terminal window is a fresh shell, so it needs Step 0's `export PATH=...` line again
+> before any `npm` command. Every 🖥️ MAC block below includes it, so pasting a whole block always
+> works no matter which window you're in.
 
 ---
 
@@ -179,6 +185,8 @@ including `/api/v1`, `/api/v1/posts`, and so on.
 > on your Mac instead and copy the result:
 > ```bash
 > # 🖥️ MAC
+> export PATH="$HOME/.nvm/versions/node/v20.20.2/bin:$PATH"
+> cd "/Users/basia/Projects/Linkedin Tool/LinkedIn-research-tool"
 > npm run build
 > rsync -av .next/ VPS_USER@VPS_IP:/srv/research-api/.next/
 > ```
@@ -344,6 +352,7 @@ no reconfiguration:
 
 ```bash
 # 🖥️ MAC
+export PATH="$HOME/.nvm/versions/node/v20.20.2/bin:$PATH"
 cd "/Users/basia/Projects/Linkedin Tool/LinkedIn-research-tool"
 npm run snapshot -- --token REMOTE_TOKEN
 scp snapshot.db VPS_USER@VPS_IP:/srv/research-api/snapshot.db.new
