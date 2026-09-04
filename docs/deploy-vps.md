@@ -32,9 +32,35 @@ Anything in `ALL_CAPS` is a placeholder **you replace**. There are only three:
 
 | Placeholder | What it is | Where to find it |
 | --- | --- | --- |
-| `VPS_IP` | Your server's IP address | Hostinger hPanel → VPS → Overview |
-| `VPS_USER` | Your SSH username, usually `root` | Hostinger hPanel → VPS → SSH Access |
+| `VPS_IP` | Your server's IPv4 address | hPanel, see below |
+| `VPS_USER` | Your SSH username, `root` | hPanel, see below |
 | `REMOTE_TOKEN` | Printed by Step 1. Save it. | Step 1 output |
+
+### Finding VPS_IP and VPS_USER
+
+1. Log in to [hpanel.hostinger.com](https://hpanel.hostinger.com).
+2. Click **VPS** in the top navigation.
+3. Click **Manage** next to your server.
+4. Scroll to the **VPS details** card. It shows your **SSH username** (`root`) and **IPv4 address**.
+   That address is `VPS_IP`.
+
+**The root password is not displayed anywhere**, by design. If you don't know it (you set it when
+the server was first configured), reset it on that same page: find **Root password**, click
+**Change**, set a new one, and click **Update**.
+
+### Two different terminals — don't confuse them
+
+| Terminal | What it is |
+| --- | --- |
+| The **Hermes CLI** at `…hostingersite.com/cli` | The agent's own restricted shell (`lshell`), running as user `u4s`. Blocks `systemctl`, `apt-get`, and most file paths. **Not** where you deploy. |
+| hPanel → VPS → **Manage** → **Terminal** (top right) | A real root shell on your server, opened in a browser tab, already logged in. No password needed. |
+
+That second one is the easy way to do every ☁️ VPS step. You still need `VPS_IP` and the root
+password for the two 🖥️ MAC steps that copy files across (Steps 5 and 7), since `rsync` and `scp`
+run from your Mac.
+
+> If you'd rather not type a password repeatedly, run `ssh-copy-id root@VPS_IP` once from your Mac.
+> After that `ssh` and `scp` authenticate with your key.
 
 ---
 
@@ -96,11 +122,15 @@ never affects the other.
 ## Step 2 — Connect to the VPS 🖥️ MAC
 
 ```bash
-ssh VPS_USER@VPS_IP
+ssh root@VPS_IP
 ```
 
-First time it asks `Are you sure you want to continue connecting?` — type `yes`. Then enter your
-password (Hostinger emailed it, or you set it in hPanel).
+First time it asks `Are you sure you want to continue connecting?` — type `yes`. Then enter the root
+password (the one you set when the server was configured, or reset in hPanel as described above).
+
+> **Alternative that needs no password:** hPanel → VPS → **Manage** → **Terminal** (top right) opens
+> a root shell in a browser tab. Every ☁️ VPS step works there. Allow pop-ups from
+> `hpanel.hostinger.com` if nothing opens.
 
 You're in when the prompt changes to something like `root@srv123:~#`.
 
@@ -181,8 +211,8 @@ npm run build
 `npm ci` takes a few minutes (it compiles `better-sqlite3`). `npm run build` ends with a route list
 including `/api/v1`, `/api/v1/posts`, and so on.
 
-> **If `npm run build` fails with "JavaScript heap out of memory"**, your VPS is short on RAM. Build
-> on your Mac instead and copy the result:
+> **If `npm run build` fails with "JavaScript heap out of memory"** — unlikely, since the smallest
+> Hostinger KVM plan has 4 GB RAM, but if it happens — build on your Mac instead and copy the result:
 > ```bash
 > # 🖥️ MAC
 > export PATH="$HOME/.nvm/versions/node/v20.20.2/bin:$PATH"
