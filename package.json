@@ -13,6 +13,7 @@
     "start": "next start -H 127.0.0.1",
     "start:agent": "READONLY_SERVER=1 next start -H 127.0.0.1 -p 3100",
     "api:token": "node scripts/api-token.mjs",
+    "snapshot": "node scripts/export-snapshot.mjs",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

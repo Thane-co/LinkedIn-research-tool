@@ -1696,3 +1696,20 @@ env var unset the middleware is inert and the normal instance behaves exactly as
 **Still true:** both instances bind `127.0.0.1`, and on the MAIN instance the app's own GET routes
 stay unauthenticated, so the token is a real boundary only on a `start:agent` instance. Do not expose
 either port to a network without putting real auth in front of it.
+
+### 20.5 Deployable snapshot
+`scripts/export-snapshot.mjs` (`npm run snapshot`) builds a read-only copy of the corpus for a remote
+host, so an agent that does not run on this machine can query it without exposing the laptop.
+
+- **Schema is copied from the source db's own `sqlite_master`**, never from `schema.sql`, so a
+  snapshot cannot drift from the migrations actually applied to the live database.
+- **Never copied:** `posts.raw_data` / `profiles.raw_data` (315MB of 588MB, and stripped from every
+  API response anyway), the whole `settings` table, and `scrape_jobs`.
+- **The settings table is recreated with exactly one row:** a freshly minted `readonly_api_token`,
+  distinct from the local one, so revoking either side is independent. `--token <t>` reuses an
+  existing one, so a re-sync needs no agent reconfiguration.
+- **A host with no API keys cannot scrape even in principle** — that, plus `READONLY_SERVER=1`, is
+  why the remote copy is safe to run unattended.
+- The script **refuses to write** a snapshot that still carries `raw_data` or any extra setting.
+- Deployment runbook: `docs/deploy-vps.md`. Bind the remote instance to `127.0.0.1` so only processes
+  on that host can reach it.

@@ -31,3 +31,8 @@ research.db
 *.tsbuildinfo
 next-env.d.ts
 npm-debug.log*
+
+# Deployable corpus snapshot (§20.5) — rebuilt with `npm run snapshot`, never committed
+snapshot.db
+snapshot.db-wal
+snapshot.db-shm
