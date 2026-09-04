@@ -18,7 +18,9 @@
 
 import { randomBytes } from 'node:crypto'
 import { existsSync, statSync, unlinkSync } from 'node:fs'
-import Database from 'better-sqlite3'
+import { loadDatabase } from './_load-sqlite.mjs'
+
+const Database = await loadDatabase()
 
 const args = process.argv.slice(2)
 const tokenFlag = args.indexOf('--token')

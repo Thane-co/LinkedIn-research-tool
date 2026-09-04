@@ -38,6 +38,25 @@ Anything in `ALL_CAPS` is a placeholder **you replace**. There are only three:
 
 ---
 
+## Step 0 — Put Node 20 on your PATH 🖥️ MAC
+
+**Do this first, in every new Terminal window, or Step 1 fails.**
+
+```bash
+export PATH="$HOME/.nvm/versions/node/v20.20.2/bin:$PATH"
+node -v          # must print v20.x
+```
+
+Your default `node` is v26 (Hermes installs its own at `~/.hermes/node/bin/node` and puts it first
+on your PATH). This repo needs Node 20: `better-sqlite3` is a native module, and version 11.x
+cannot compile against Node 26's V8 API and ships no prebuilt binary for it. Running a script under
+Node 26 now prints an explanation rather than a stack trace, but it still won't run.
+
+To stop repeating this, add that `export` line to the end of `~/.zshrc`. It only affects new
+Terminal windows, and it does not disturb Hermes, which invokes its own Node by absolute path.
+
+---
+
 ## Step 1 — Build the snapshot 🖥️ MAC
 
 ```bash
@@ -356,6 +375,8 @@ If you changed the app code too, redo Steps 5 and 6 before restarting.
 | `totalPosts: 0` | Pointing at the wrong file. Confirm `DB_PATH` in the service file and that `/srv/research-api/snapshot.db` exists and is ~233MB. |
 | Build runs out of memory | See the note under Step 6: build on your Mac, rsync `.next`. |
 | `next: not found` in the service log | `npm ci` didn't finish. Re-run it in `/srv/research-api`. |
+| `better-sqlite3 is compiled for a different Node version` 🖥️ MAC | You're on Node 26. Run Step 0's `export PATH=...` line first. |
+| `ERR_DLOPEN_FAILED` / `NODE_MODULE_VERSION 115 ... requires 147` | Same thing, from a command that predates the friendly message. Step 0. |
 
 Live logs:
 

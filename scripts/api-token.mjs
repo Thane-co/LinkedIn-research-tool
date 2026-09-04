@@ -9,7 +9,9 @@
 // The token lives in the same local `settings` table as your API keys — never in code, never in git.
 
 import { randomBytes } from 'node:crypto'
-import Database from 'better-sqlite3'
+import { loadDatabase } from './_load-sqlite.mjs'
+
+const Database = await loadDatabase()
 
 const KEY = 'readonly_api_token'
 const DB_PATH = process.env.DB_PATH ?? './research.db'
