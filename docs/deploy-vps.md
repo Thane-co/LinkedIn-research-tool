@@ -1,5 +1,11 @@
 # Deploying the read-only API to your VPS
 
+> **You do not currently have a VPS.** hPanel → VPS shows only purchase offers, and the Hostinger
+> Hermes Agent is a managed product with no server you control (its CLI is a restricted `lshell`: no
+> root, no `systemctl`, no `docker`). This runbook is kept for when you do get a server, on Hostinger
+> or anywhere else. **For the setup that works today, see
+> [tunnel-from-mac.md](tunnel-from-mac.md).**
+
 A step-by-step runbook. Hermes ends up querying the corpus over `localhost` on the VPS it already
 runs on: nothing exposed to the internet, no tunnel, no dependency on your Mac being awake.
 

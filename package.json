@@ -12,6 +12,8 @@
     "build": "next build",
     "start": "next start -H 127.0.0.1",
     "start:agent": "READONLY_SERVER=1 next start -H 127.0.0.1 -p 3100",
+    "start:snapshot": "DB_PATH=./snapshot.db READONLY_SERVER=1 next start -H 127.0.0.1 -p 3100",
+    "tunnel": "cloudflared tunnel --url http://127.0.0.1:3100",
     "api:token": "node scripts/api-token.mjs",
     "snapshot": "node scripts/export-snapshot.mjs",
     "lint": "next lint",
