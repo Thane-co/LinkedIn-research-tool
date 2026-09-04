@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   isSubstackContent,
+  mapApifyInstagramToRow,
   mapApifyPostToRow,
+  mapApifyProfileToRow,
   mapApifySubstackToRow,
   mapApifyTweetToRow,
   substackNoteHasContent,
 } from '@/lib/pure/mappers'
-import type { ApifyPost, ApifySubstackPost, ApifyTweet } from '@/lib/types'
+import type { ApifyInstagramPost, ApifyPost, ApifyProfile, ApifySubstackPost, ApifyTweet } from '@/lib/types'
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 
@@ -418,5 +420,220 @@ describe('mapApifySubstackToRow (Substack)', () => {
     expect(isSubstackContent({})).toBe(true) // no type → treated as a post
     expect(isSubstackContent({ type: 'author' })).toBe(false) // profile metadata, not content
     expect(isSubstackContent({ type: 'publication' })).toBe(false)
+  })
+})
+
+const instagramRaw = (over: Partial<ApifyInstagramPost> = {}): ApifyInstagramPost => ({
+  id: '3660778310592222546',
+  shortCode: 'DLNsnpUTdVS',
+  url: 'https://www.instagram.com/p/DLNsnpUTdVS/',
+  caption: 'Your phone isn’t rotting your brain',
+  type: 'Image',
+  likesCount: 73473,
+  commentsCount: 230,
+  videoViewCount: null,
+  timestamp: '2026-06-22T19:00:10.000Z',
+  ownerUsername: 'natgeo',
+  ownerFullName: 'National Geographic',
+  ownerId: '787132',
+  displayUrl: 'https://ig.cdn/img.jpg',
+  videoUrl: null,
+  images: [],
+  ...over,
+})
+
+describe('mapApifyInstagramToRow (Instagram §18)', () => {
+  it('prefixes the id with instagram- (derived from the shortCode)', () => {
+    expect(mapApifyInstagramToRow(instagramRaw(), 'ai').id).toBe('instagram-DLNsnpUTdVS')
+  })
+
+  it('falls back to raw.id when the shortCode is missing', () => {
+    expect(mapApifyInstagramToRow(instagramRaw({ shortCode: undefined }), 'ai').id).toBe('instagram-3660778310592222546')
+  })
+
+  it('throws when neither shortCode nor id can be derived', () => {
+    expect(() => mapApifyInstagramToRow(instagramRaw({ shortCode: undefined, id: undefined }), 'ai')).toThrow()
+  })
+
+  it('builds the canonical url from the shortCode when url is absent', () => {
+    expect(mapApifyInstagramToRow(instagramRaw({ url: undefined }), 'ai').url).toBe(
+      'https://www.instagram.com/p/DLNsnpUTdVS/',
+    )
+  })
+
+  it('maps author fields from ownerUsername/ownerFullName', () => {
+    const row = mapApifyInstagramToRow(instagramRaw(), 'ai')
+    expect(row.author_id).toBe('natgeo')
+    expect(row.author_name).toBe('National Geographic')
+    expect(row.author_url).toBe('https://www.instagram.com/natgeo/')
+    expect(row.author_type).toBe('profile')
+  })
+
+  it('falls back author_name to the handle when ownerFullName is absent', () => {
+    expect(mapApifyInstagramToRow(instagramRaw({ ownerFullName: null }), 'ai').author_name).toBe('natgeo')
+  })
+
+  it('maps engagement (shares are always 0 — Instagram has no reshare count)', () => {
+    const row = mapApifyInstagramToRow(instagramRaw(), 'ai')
+    expect(row.likes).toBe(73473)
+    expect(row.comments).toBe(230)
+    expect(row.shares).toBe(0)
+  })
+
+  it('defaults missing engagement counts to 0', () => {
+    const row = mapApifyInstagramToRow(instagramRaw({ likesCount: undefined, commentsCount: undefined }), 'ai')
+    expect(row.likes).toBe(0)
+    expect(row.comments).toBe(0)
+  })
+
+  it('parses timestamp to ISO, null when absent/unparseable', () => {
+    expect(mapApifyInstagramToRow(instagramRaw(), 'ai').posted_at).toBe('2026-06-22T19:00:10.000Z')
+    expect(mapApifyInstagramToRow(instagramRaw({ timestamp: null }), 'ai').posted_at).toBeNull()
+    expect(mapApifyInstagramToRow(instagramRaw({ timestamp: 'not-a-date' }), 'ai').posted_at).toBeNull()
+  })
+
+  it('maps a single image post to image media + thumbnail', () => {
+    const row = mapApifyInstagramToRow(instagramRaw(), 'ai')
+    expect(row.image_url).toBe('https://ig.cdn/img.jpg')
+    expect(JSON.parse(row.media!)).toEqual({ type: 'image', images: ['https://ig.cdn/img.jpg'] })
+  })
+
+  it('maps a video post to video media (poster = displayUrl)', () => {
+    const row = mapApifyInstagramToRow(
+      instagramRaw({ type: 'Video', videoUrl: 'https://ig.cdn/reel.mp4' }),
+      'ai',
+    )
+    expect(JSON.parse(row.media!)).toEqual({
+      type: 'video',
+      url: 'https://ig.cdn/reel.mp4',
+      poster: 'https://ig.cdn/img.jpg',
+    })
+    expect(row.image_url).toBe('https://ig.cdn/img.jpg')
+  })
+
+  it('sets platform, market, is_repost=0, and a fresh scraped_at', () => {
+    const row = mapApifyInstagramToRow(instagramRaw(), 'mkt')
+    expect(row.platform).toBe('instagram')
+    expect(row.market).toBe('mkt')
+    expect(row.is_repost).toBe(0)
+    expect(row.scraped_at).toMatch(ISO_RE)
+    expect(row.content).toBe('Your phone isn’t rotting your brain')
+    expect(JSON.parse(row.raw_data!).ownerId).toBe('787132')
+  })
+
+  it('nulls author_url when the owner handle is absent', () => {
+    const row = mapApifyInstagramToRow(instagramRaw({ ownerUsername: undefined, ownerFullName: undefined }), 'ai')
+    expect(row.author_id).toBeNull()
+    expect(row.author_url).toBeNull()
+    expect(row.author_name).toBeNull()
+  })
+
+  it('nulls url + content when both url/shortCode and caption are absent (id from raw.id)', () => {
+    const row = mapApifyInstagramToRow(instagramRaw({ url: undefined, shortCode: undefined, caption: null }), 'ai')
+    expect(row.id).toBe('instagram-3660778310592222546') // fell back to raw.id
+    expect(row.url).toBeNull() // no url and no shortCode to build one from
+    expect(row.content).toBeNull()
+  })
+
+  it('leaves media/image_url null when the post carries no media at all', () => {
+    const row = mapApifyInstagramToRow(instagramRaw({ type: 'Image', displayUrl: null, images: [] }), 'ai')
+    expect(row.media).toBeNull()
+    expect(row.image_url).toBeNull()
+  })
+})
+
+const profileRaw = (over: Partial<ApifyProfile> = {}): ApifyProfile => ({
+  publicIdentifier: 'basiakubicka',
+  linkedinUrl: 'https://www.linkedin.com/in/basiakubicka/',
+  firstName: 'Basia',
+  lastName: 'Kubicka',
+  headline: 'AI PM',
+  about: 'I build AI products.',
+  photo: 'https://img/basia.png',
+  location: 'Cambridge, Massachusetts',
+  followerCount: 69000,
+  connectionsCount: 500,
+  experience: [{ company: 'Techstars startup', position: 'CEO' }],
+  education: [{ school: 'Frankfurt UAS' }],
+  skills: [{ name: 'Product Management' }],
+  ...over,
+})
+
+describe('mapApifyProfileToRow (LinkedIn profile, §19)', () => {
+  it('uses the clean publicIdentifier as the row id', () => {
+    expect(mapApifyProfileToRow(profileRaw()).id).toBe('basiakubicka')
+  })
+
+  it('falls back to the slug parsed from linkedinUrl when publicIdentifier is absent', () => {
+    const row = mapApifyProfileToRow(profileRaw({ publicIdentifier: undefined }))
+    expect(row.id).toBe('basiakubicka')
+  })
+
+  it('throws when neither publicIdentifier nor a url slug yields an id', () => {
+    expect(() => mapApifyProfileToRow(profileRaw({ publicIdentifier: undefined, linkedinUrl: undefined }))).toThrow(
+      /profile id/i,
+    )
+    // a url with no /in/<slug> segment can't yield an id either
+    expect(() =>
+      mapApifyProfileToRow(profileRaw({ publicIdentifier: undefined, linkedinUrl: 'https://linkedin.com/feed/' })),
+    ).toThrow(/profile id/i)
+  })
+
+  it('maps the follower and connection counts (default 0 when absent)', () => {
+    expect(mapApifyProfileToRow(profileRaw()).followers).toBe(69000)
+    expect(mapApifyProfileToRow(profileRaw()).connections).toBe(500)
+    const bare = mapApifyProfileToRow(profileRaw({ followerCount: undefined, connectionsCount: undefined }))
+    expect(bare.followers).toBe(0)
+    expect(bare.connections).toBe(0)
+  })
+
+  it('joins first + last into name, else uses raw.name, else null', () => {
+    expect(mapApifyProfileToRow(profileRaw()).name).toBe('Basia Kubicka')
+    expect(mapApifyProfileToRow(profileRaw({ firstName: undefined, lastName: undefined, name: 'Fallback' })).name).toBe(
+      'Fallback',
+    )
+    expect(
+      mapApifyProfileToRow(profileRaw({ firstName: undefined, lastName: undefined, name: undefined })).name,
+    ).toBeNull()
+  })
+
+  it('coerces location from a string or a parsed object, else null', () => {
+    expect(mapApifyProfileToRow(profileRaw()).location).toBe('Cambridge, Massachusetts')
+    expect(mapApifyProfileToRow(profileRaw({ location: { linkedinText: 'Boston, MA' } })).location).toBe('Boston, MA')
+    expect(mapApifyProfileToRow(profileRaw({ location: { text: 'NYC' } })).location).toBe('NYC')
+    expect(mapApifyProfileToRow(profileRaw({ location: {} })).location).toBeNull()
+    expect(mapApifyProfileToRow(profileRaw({ location: null })).location).toBeNull()
+  })
+
+  it('stores experience/education/skills as JSON, null when empty/absent', () => {
+    const row = mapApifyProfileToRow(profileRaw())
+    expect(JSON.parse(row.experience!)).toEqual([{ company: 'Techstars startup', position: 'CEO' }])
+    expect(JSON.parse(row.skills!)).toEqual([{ name: 'Product Management' }])
+    const empty = mapApifyProfileToRow(profileRaw({ experience: [], education: undefined, skills: [] }))
+    expect(empty.experience).toBeNull()
+    expect(empty.education).toBeNull()
+    expect(empty.skills).toBeNull()
+  })
+
+  it('maps headline/about/avatar, keeps the canonical url, sets an ISO scraped_at, preserves raw_data', () => {
+    const row = mapApifyProfileToRow(profileRaw())
+    expect(row.headline).toBe('AI PM')
+    expect(row.about).toBe('I build AI products.')
+    expect(row.avatar_url).toBe('https://img/basia.png')
+    expect(row.url).toBe('https://www.linkedin.com/in/basiakubicka/')
+    expect(row.scraped_at).toMatch(ISO_RE)
+    expect(JSON.parse(row.raw_data!).publicIdentifier).toBe('basiakubicka')
+  })
+
+  it('synthesizes a canonical url from the id when linkedinUrl is absent', () => {
+    const row = mapApifyProfileToRow(profileRaw({ linkedinUrl: undefined }))
+    expect(row.url).toBe('https://www.linkedin.com/in/basiakubicka/')
+    expect(row.headline).toBe('AI PM')
+    // nullish fields default cleanly
+    const sparse = mapApifyProfileToRow({ publicIdentifier: 'x' })
+    expect(sparse.headline).toBeNull()
+    expect(sparse.about).toBeNull()
+    expect(sparse.avatar_url).toBeNull()
+    expect(sparse.name).toBeNull()
   })
 })

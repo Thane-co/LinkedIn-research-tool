@@ -33,6 +33,8 @@ Anthropic), all with the **user's own** keys.
 - `npm test -- -t "<name>"` — run tests matching a name.
 - `npm run test:coverage` — coverage report (thresholds below must pass).
 - `npx tsc --noEmit` — typecheck under strict mode (must be clean; no `any`).
+- `npm run api:token` — create/show the read-only API bearer token (`-- --show|--rotate|--revoke`).
+- `npm run start:agent` — read-only instance (`READONLY_SERVER=1`, port 3100) for external agents.
 
 Wire these into `package.json` when scaffolding if the names differ. Work **bottom-up by layer**
 (PRD §12): keep each layer's tests green before starting the next.
@@ -80,6 +82,12 @@ the same change.**
   text/image weight `0.75/0.25` · min group size `2` · candidate cap `400`.
 - **Embeddings:** text `voyage-3`, image `voyage-multimodal-3`, both **1024-dim**, batch **100**;
   **never re-embed** a post that already has an embedding unless `reEmbed` is set.
+- **`/api/v1` is GET-only, forever** (§20). Every v1 route module exports **only** `GET`; a test
+  asserts no mutating export exists. Never serialize `embedding`, `image_embedding`, or `raw_data`.
+- **`/api/posts` and `/api/v1/posts` share `runPostsQuery()`** (`lib/posts-query.ts`) — one filter
+  implementation for the dashboard and the agent API. Don't fork the parsing.
+- **Every side-effecting route must be POST/PUT/DELETE; every GET route must only read.** The
+  read-only server mode (`middleware.ts`, §20.4) blocks non-GET wholesale and relies on this.
 
 ---
 

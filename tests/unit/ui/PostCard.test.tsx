@@ -111,4 +111,27 @@ describe('PostCard', () => {
     expect(screen.getByRole('img')).toHaveAttribute('src', 'https://img/fallback.png')
   })
 
+  it('shows a video transcript under the caption with a divider, only when present (§18)', () => {
+    const { rerender } = render(<PostCard post={makePost({ content: 'my caption', transcript: null })} />)
+    expect(screen.queryByTestId('transcript')).not.toBeInTheDocument()
+
+    rerender(<PostCard post={makePost({ content: 'my caption', transcript: 'the spoken words of the reel' })} />)
+    const block = screen.getByTestId('transcript')
+    expect(block).toHaveTextContent(/video transcript/i)
+    expect(block).toHaveTextContent('the spoken words of the reel')
+  })
+
+  it('routes an Instagram CDN video poster through the same-origin media proxy (§18)', () => {
+    const poster = 'https://scontent-lga3-1.cdninstagram.com/v/poster.jpg?a=1'
+    render(
+      <PostCard
+        post={makePost({ platform: 'instagram', url: 'https://www.instagram.com/p/X/', media: { type: 'video', url: 'https://ig/stream', poster } })}
+      />,
+    )
+    expect(screen.getByTestId('video-media').querySelector('img')).toHaveAttribute(
+      'src',
+      `/api/media?url=${encodeURIComponent(poster)}`,
+    )
+  })
+
 })

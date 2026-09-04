@@ -7,7 +7,7 @@ import { upsertCreator } from '@/lib/db/creators.repo'
 import { getAuthorHistory, insertPosts, searchPosts } from '@/lib/db/posts.repo'
 import { fetchSubstackNoteContent } from '@/lib/substack'
 import { makePostRow } from '@/tests/fixtures/posts'
-import type { ApifyPost, ApifySubstackPost } from '@/lib/types'
+import type { ApifyInstagramPost, ApifyPost, ApifySubstackPost } from '@/lib/types'
 
 // Keep the pure input builders real; mock only the network run (PRD §12 step 21) + the follow-on
 // enrich (its own unit covers it — here we only assert it is/ isn't fired).
@@ -49,6 +49,23 @@ const substackItem = (id: string, over: Partial<ApifySubstackPost> = {}): ApifyS
   ...over,
 })
 
+/** Build a raw Apify Instagram item. */
+const instagramItem = (code: string, over: Partial<ApifyInstagramPost> = {}): ApifyInstagramPost => ({
+  id: `id-${code}`,
+  shortCode: code,
+  url: `https://www.instagram.com/p/${code}/`,
+  caption: 'a reel about ai agents',
+  type: 'Video',
+  likesCount: 100,
+  commentsCount: 5,
+  timestamp: '2026-06-22T00:00:00.000Z',
+  ownerUsername: 'natgeo',
+  ownerFullName: 'National Geographic',
+  displayUrl: 'https://ig.cdn/poster.jpg',
+  videoUrl: 'https://ig.cdn/reel.mp4',
+  ...over,
+})
+
 beforeEach(() => {
   getDb(':memory:')
   vi.clearAllMocks()
@@ -67,7 +84,7 @@ describe('runScrape', () => {
     })
     mockRunActor.mockImplementation(async (_actorId, input: object) => {
       if ('searchQueries' in input) return [liItem('100'), liItem('200')]
-      if ('profileUrls' in input) return [liItem('100'), liItem('300')] // 100 overlaps keyword
+      if ('targetUrls' in input) return [liItem('100'), liItem('300')] // 100 overlaps keyword
       return []
     })
 
@@ -131,6 +148,40 @@ describe('runScrape', () => {
     expect(rows.every((p) => p.platform === 'substack')).toBe(true)
   })
 
+  it('scrapes an Instagram creator via the instagram actor and maps its posts (§18)', async () => {
+    upsertCreator({
+      platform: 'instagram',
+      profile_url: 'https://www.instagram.com/natgeo/',
+      author_id: 'natgeo',
+      tier: 'core',
+    })
+    let creatorInput: Record<string, unknown> | null = null
+    mockRunActor.mockImplementation(async (_actorId, input: object) => {
+      if ('username' in input) {
+        creatorInput = input as Record<string, unknown>
+        return [instagramItem('AAA'), instagramItem('BBB')]
+      }
+      return []
+    })
+
+    const stats = await runScrape({ platforms: ['instagram'], mode: 'creator', timeframe: 'week', market: 'ai' })
+
+    expect(creatorInput).not.toBeNull() // creator mode targets the profile url via `username`
+    expect(creatorInput!.username).toEqual(['https://www.instagram.com/natgeo/'])
+    expect(typeof creatorInput!.onlyPostsNewerThan).toBe('string') // bounded timeframe → date cutoff
+    expect(stats.inserted).toBe(2)
+    const rows = searchPosts({ platforms: ['instagram'] }).posts
+    expect(rows.map((p) => p.id).sort()).toEqual(['instagram-AAA', 'instagram-BBB'])
+    expect(rows.every((p) => p.platform === 'instagram')).toBe(true)
+  })
+
+  it('does NOT run Instagram in keyword-only mode (the post scraper is profile-driven) (§18)', async () => {
+    upsertCreator({ platform: 'instagram', profile_url: 'https://www.instagram.com/natgeo/', author_id: 'natgeo', tier: 'core' })
+    mockRunActor.mockResolvedValue([])
+    await runScrape({ platforms: ['instagram'], mode: 'keyword', keywords: ['ai'], timeframe: 'week', market: 'ai' })
+    expect(mockRunActor).not.toHaveBeenCalled() // no keyword actor for Instagram → nothing to run
+  })
+
   it('skips Substack author/publication metadata records (only posts + notes are stored) (§17)', async () => {
     upsertCreator({
       platform: 'substack',
@@ -188,7 +239,7 @@ describe('runScrape', () => {
     upsertCreator({ platform: 'linkedin', profile_url: 'https://www.linkedin.com/in/jane', author_id: 'jane', tier: 'core' })
     upsertCreator({ platform: 'substack', profile_url: 'https://laraacosta.substack.com', author_id: 'laraacosta', tier: 'core' })
     mockRunActor.mockImplementation(async (_a, input: object) => {
-      if ('profileUrls' in input) return [liItem('100')]
+      if ('targetUrls' in input) return [liItem('100')]
       if ('publicationHandles' in input) return [substackItem('1')]
       return []
     })

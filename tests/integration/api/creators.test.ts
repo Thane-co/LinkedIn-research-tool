@@ -51,6 +51,15 @@ describe('POST /api/creators', () => {
     expect(lara.persona).toBe('lara acosta') // auto-matched from the display name
   })
 
+  it('adds an Instagram creator from a profile url, deriving the handle (§18)', async () => {
+    const { creators } = await (
+      await POST(postJson({ input: 'https://www.instagram.com/natgeo/' }))
+    ).json()
+    const nat = creators.find((c: { author_id: string }) => c.author_id === 'natgeo')
+    expect(nat.platform).toBe('instagram')
+    expect(nat.profile_url).toBe('https://www.instagram.com/natgeo/')
+  })
+
   it('links a person across platforms: auto-match by name, with an explicit persona override', async () => {
     insertPosts([makePostRow({ id: 'p1', author_id: 'lara-li', author_name: 'Lara Acosta', platform: 'linkedin' })])
     await POST(postJson({ input: 'https://www.linkedin.com/in/lara-li' })) // persona auto-derived

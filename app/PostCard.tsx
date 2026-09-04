@@ -5,12 +5,12 @@
 
 import { useState } from 'react'
 import { xFactorBadge } from '@/lib/pure/badge'
-import { safeHref } from '@/lib/pure/url'
+import { mediaProxySrc, safeHref } from '@/lib/pure/url'
 import type { PostMedia } from '@/lib/types'
 
 export interface PostCardPost {
   id: string
-  platform: 'linkedin' | 'twitter' | 'substack'
+  platform: 'linkedin' | 'twitter' | 'substack' | 'instagram'
   url: string | null
   content: string | null
   author_name: string | null
@@ -23,6 +23,7 @@ export interface PostCardPost {
   scrape_source: 'keyword' | 'creator' | 'both' | null
   image_url: string | null
   media?: PostMedia | null
+  transcript?: string | null // §18: speech-to-text of a video post, shown under the caption
 }
 
 /* eslint-disable @next/next/no-img-element */
@@ -31,18 +32,23 @@ function PostMediaView({ post }: { post: PostCardPost }) {
   const m = post.media
   if (m?.type === 'image') {
     if (m.images.length <= 1) {
-      return m.images[0] ? <img className="post-card__image" src={m.images[0]} alt="post media" /> : null
+      const src = mediaProxySrc(m.images[0])
+      return src ? <img className="post-card__image" src={src} alt="post media" /> : null
     }
     return (
       <div className="post-card__carousel" data-testid="carousel">
-        {m.images.map((src, i) => (
-          <img key={i} className="post-card__image post-card__carousel-item" src={src} alt="post media" />
-        ))}
+        {m.images.map((src, i) => {
+          const proxied = mediaProxySrc(src)
+          return proxied ? (
+            <img key={i} className="post-card__image post-card__carousel-item" src={proxied} alt="post media" />
+          ) : null
+        })}
         <span className="post-card__media-count">{m.images.length} images</span>
       </div>
     )
   }
   if (m?.type === 'video') {
+    const poster = mediaProxySrc(m.poster)
     return (
       <a
         className="post-card__media-link post-card__video"
@@ -52,7 +58,7 @@ function PostMediaView({ post }: { post: PostCardPost }) {
         rel="noopener noreferrer"
         aria-label="play the video (opens the post)"
       >
-        {m.poster && <img className="post-card__image" src={m.poster} alt="video thumbnail" />}
+        {poster && <img className="post-card__image" src={poster} alt="video thumbnail" />}
         <span className="post-card__play" aria-hidden="true">
           ▶
         </span>
@@ -60,6 +66,7 @@ function PostMediaView({ post }: { post: PostCardPost }) {
     )
   }
   if (m?.type === 'document') {
+    const cover = mediaProxySrc(m.cover)
     return (
       <a
         className="post-card__media-link post-card__document"
@@ -68,13 +75,14 @@ function PostMediaView({ post }: { post: PostCardPost }) {
         target="_blank"
         rel="noopener noreferrer"
       >
-        {m.cover && <img className="post-card__image" src={m.cover} alt={m.title ?? 'document'} />}
+        {cover && <img className="post-card__image" src={cover} alt={m.title ?? 'document'} />}
         <span className="badge post-card__doc-badge">📄 {m.pages ?? '?'} pages</span>
       </a>
     )
   }
   // fallback: a legacy/thumbnail-only post
-  return post.image_url ? <img className="post-card__image" src={post.image_url} alt="post media" /> : null
+  const fallback = mediaProxySrc(post.image_url)
+  return fallback ? <img className="post-card__image" src={fallback} alt="post media" /> : null
 }
 /* eslint-enable @next/next/no-img-element */
 
@@ -91,9 +99,14 @@ function formatDate(iso: string | null | undefined): string {
 
 export function PostCard({ post }: { post: PostCardPost }) {
   const [expanded, setExpanded] = useState(false)
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false)
   const content = post.content ?? ''
   const isLong = content.length > TRUNCATE_AT
   const shown = isLong && !expanded ? `${content.slice(0, TRUNCATE_AT)}…` : content
+
+  const transcript = post.transcript?.trim() ?? ''
+  const transcriptLong = transcript.length > TRUNCATE_AT
+  const transcriptShown = transcriptLong && !transcriptExpanded ? `${transcript.slice(0, TRUNCATE_AT)}…` : transcript
 
   const badge = xFactorBadge(post.x_factor)
 
@@ -126,6 +139,24 @@ export function PostCard({ post }: { post: PostCardPost }) {
         <button type="button" className="post-card__toggle" onClick={() => setExpanded((e) => !e)}>
           {expanded ? 'Show less' : 'Show more'}
         </button>
+      )}
+
+      {transcript && (
+        <section className="post-card__transcript" data-testid="transcript">
+          <div className="post-card__transcript-head">
+            <span className="post-card__transcript-label">🎬 Video transcript</span>
+          </div>
+          <p className="post-card__transcript-text">{transcriptShown}</p>
+          {transcriptLong && (
+            <button
+              type="button"
+              className="post-card__toggle"
+              onClick={() => setTranscriptExpanded((e) => !e)}
+            >
+              {transcriptExpanded ? 'Show less' : 'Show more'}
+            </button>
+          )}
+        </section>
       )}
 
       <footer className="post-card__stats">

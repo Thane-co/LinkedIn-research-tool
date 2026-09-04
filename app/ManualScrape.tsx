@@ -27,7 +27,7 @@ export function ManualScrape({ pollIntervalMs = 1500 }: { pollIntervalMs?: numbe
   const [creators, setCreators] = useState<{ platform: string }[]>([])
   const [groups, setGroups] = useState<KeywordGroup[]>([])
   const [source, setSource] = useState<Source>('both')
-  const [platform, setPlatform] = useState<'all' | 'linkedin' | 'twitter' | 'substack'>('all')
+  const [platform, setPlatform] = useState<'all' | 'linkedin' | 'twitter' | 'substack' | 'instagram'>('all')
   const [timeframe, setTimeframe] = useState<Timeframe>('week')
   const [market, setMarket] = useState('') // '' = all markets
   const [includeNotes, setIncludeNotes] = useState(false) // Substack Notes are opt-in (slower)
@@ -71,7 +71,7 @@ export function ManualScrape({ pollIntervalMs = 1500 }: { pollIntervalMs?: numbe
 
   async function run(): Promise<void> {
     setPill({ status: 'running' })
-    const platforms = platform === 'all' ? ['linkedin', 'twitter', 'substack'] : [platform]
+    const platforms = platform === 'all' ? ['linkedin', 'twitter', 'substack', 'instagram'] : [platform]
     try {
       const { jobId } = await apiFetch<{ jobId: string }>('/api/scrape', {
         method: 'POST',
@@ -121,6 +121,7 @@ export function ManualScrape({ pollIntervalMs = 1500 }: { pollIntervalMs?: numbe
             <option value="linkedin">LinkedIn</option>
             <option value="twitter">Twitter</option>
             <option value="substack">Substack</option>
+            <option value="instagram">Instagram</option>
           </select>
         </label>
         <label>

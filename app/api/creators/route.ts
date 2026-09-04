@@ -8,6 +8,7 @@ import { deleteCreator, listCreators, upsertCreator } from '@/lib/db/creators.re
 import { getAuthorHistory } from '@/lib/db/posts.repo'
 import { derivePersonaKey } from '@/lib/pure/persona'
 import {
+  extractInstagramHandle,
   extractLinkedInSlug,
   extractSubstackHandle,
   extractTwitterHandle,
@@ -42,6 +43,14 @@ function parseCreatorInput(raw: string): ParsedCreator | null {
       ? `https://substack.com/@${handle}`
       : `https://${handle}.substack.com`
     return { platform: 'substack', profile_url, author_id: handle }
+  }
+
+  // Instagram: URL-driven (§18). A bare @handle stays a Twitter handle, so only an instagram.com url
+  // resolves. Canonicalize to the profile root so re-adds dedupe.
+  if (/instagram\.com/i.test(input)) {
+    const handle = extractInstagramHandle(input)
+    if (!handle) return null
+    return { platform: 'instagram', profile_url: `https://www.instagram.com/${handle}/`, author_id: handle }
   }
 
   // Twitter/X url or a bare @handle.

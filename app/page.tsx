@@ -5,13 +5,14 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { DashboardClient } from '@/app/DashboardClient'
+import { IgCompare } from '@/app/IgCompare'
 import { ScrapeSettings } from '@/app/ScrapeSettings'
 import type { SettingsView } from '@/app/SettingsPanel'
 import { apiFetch } from '@/lib/api-client'
 
 export default function Page() {
   const [view, setView] = useState<SettingsView | null>(null)
-  const [route, setRoute] = useState<'search' | 'settings'>('settings')
+  const [route, setRoute] = useState<'search' | 'settings' | 'ig-compare'>('settings')
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(() => {
@@ -54,11 +55,16 @@ export default function Page() {
           Search
         </button>
         <button type="button" aria-pressed={route === 'settings'} onClick={() => setRoute('settings')}>
-          Scrape Settings
+          Settings
+        </button>
+        <button type="button" aria-pressed={route === 'ig-compare'} onClick={() => setRoute('ig-compare')}>
+          IG Compare (temp)
         </button>
       </nav>
 
-      {route === 'search' ? <DashboardClient /> : <ScrapeSettings view={view} onSaved={setView} />}
+      {route === 'search' && <DashboardClient />}
+      {route === 'settings' && <ScrapeSettings view={view} onSaved={setView} />}
+      {route === 'ig-compare' && <IgCompare ready={{ apify: view.ready.apify, assemblyai: view.ready.assemblyai }} />}
     </main>
   )
 }

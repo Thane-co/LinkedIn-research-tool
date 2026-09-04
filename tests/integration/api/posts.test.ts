@@ -63,6 +63,54 @@ describe('GET /api/posts — paginated mode', () => {
     expect(body.posts[0].raw_data).toBeUndefined()
   })
 
+  it('ignores a non-numeric pageSize instead of returning the entire corpus', async () => {
+    seed(Array.from({ length: 3 }, (_, i) => ({ id: `p${i}` })))
+    const body = await (await get('?pageSize=abc&page=abc')).json()
+    expect(body.pageSize).toBe(50) // default, NOT an unbounded LIMIT NULL
+    expect(body.page).toBe(1)
+    expect(body.posts).toHaveLength(3)
+  })
+
+  it('applies dateFrom/dateTo even when timeframe is omitted', async () => {
+    seed([
+      { id: 'old', posted_at: '2020-01-01T00:00:00.000Z' },
+      { id: 'new', posted_at: '2026-06-01T00:00:00.000Z' },
+    ])
+    const body = await (await get('?dateFrom=2026-01-01T00:00:00.000Z')).json()
+    expect(body.posts.map((p: { id: string }) => p.id)).toEqual(['new'])
+    expect(body.warnings).toBeUndefined() // inferring custom is correct behaviour, not a warning
+  })
+
+  it('falls back to the default threshold when one is non-numeric instead of returning zero groups', async () => {
+    const vec = vectorToBlob([1, 0, 0, 0])
+    seed([
+      { id: 'a', embedding: vec, content: 'ai agents' },
+      { id: 'b', embedding: vec, content: 'ai agents too' },
+    ])
+    const body = await (await get('?discoverTrends=true&textThreshold=abc')).json()
+    expect(body.contentClusters[0].postIds.sort()).toEqual(['a', 'b'])
+    expect(body.warnings).toContain("Ignored non-numeric textThreshold='abc'.")
+  })
+
+  it('reports ignored params so a widened result set is distinguishable from a real one', async () => {
+    seed([{ id: 'a' }])
+    const body = await (await get('?timeframe=lastweek&sort=viral&platform=myspace,linkedin&minLikes=lots')).json()
+    expect(body.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("unknown timeframe='lastweek'"),
+        expect.stringContaining("unknown sort='viral'"),
+        expect.stringContaining('unknown platform(s): myspace'),
+        expect.stringContaining("non-numeric minLikes='lots'"),
+      ]),
+    )
+  })
+
+  it('warns when timeframe overrides a supplied date range', async () => {
+    seed([{ id: 'a' }])
+    const body = await (await get('?timeframe=week&dateFrom=2020-01-01T00:00:00.000Z')).json()
+    expect(body.warnings[0]).toMatch(/only applied with timeframe=custom/)
+  })
+
   it('filters by market bucket', async () => {
     seed([
       { id: 'a', market: 'ai' },

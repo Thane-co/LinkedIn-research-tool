@@ -8,24 +8,29 @@ import { apiFetch } from '@/lib/api-client'
 
 export interface SettingsView {
   settings: Record<string, string> // masked: secrets are 'set' | 'unset'
-  ready: { apify: boolean; voyage: boolean; anthropic: boolean }
+  ready: { apify: boolean; voyage: boolean; anthropic: boolean; assemblyai: boolean }
 }
 
 type ProbeResult = { ok: boolean; error?: string }
-type TestResults = { apify: ProbeResult; voyage: ProbeResult; anthropic: ProbeResult }
+type TestResults = { apify: ProbeResult; voyage: ProbeResult; anthropic: ProbeResult; assemblyai: ProbeResult }
 
 const SECRET_FIELDS = [
   { key: 'apify_api_token', label: 'Apify API token' },
   { key: 'voyage_api_key', label: 'Voyage API key' },
   { key: 'anthropic_api_key', label: 'Anthropic API key (optional)' },
+  { key: 'assemblyai_api_key', label: 'AssemblyAI API key (ig-compare tab only)' },
 ] as const
+// Each actor field links to its Apify store page so you can open the actor you're pointing at.
 const ACTOR_FIELDS = [
-  { key: 'apify_keyword_actor_id', label: 'LinkedIn keyword actor' },
-  { key: 'apify_profile_actor_id', label: 'LinkedIn profile actor' },
-  { key: 'apify_tweet_actor_id', label: 'Twitter actor' },
-  { key: 'apify_substack_actor_id', label: 'Substack actor' },
+  { key: 'apify_keyword_actor_id', label: 'LinkedIn keyword actor', href: 'https://apify.com/harvestapi/linkedin-post-search' },
+  { key: 'apify_profile_actor_id', label: 'LinkedIn profile-posts actor', href: 'https://apify.com/harvestapi/linkedin-profile-posts' },
+  { key: 'apify_profile_detail_actor_id', label: 'LinkedIn profile-details actor', href: 'https://apify.com/harvestapi/linkedin-profile-scraper' },
+  { key: 'apify_tweet_actor_id', label: 'Twitter actor', href: 'https://apify.com/apidojo/tweet-scraper' },
+  { key: 'apify_substack_actor_id', label: 'Substack actor', href: 'https://apify.com/brilliant_gum/substack-insights-scraper' },
+  { key: 'apify_instagram_actor_id', label: 'Instagram actor', href: 'https://apify.com/apify/instagram-post-scraper' },
+  { key: 'apify_instagram_transcript_actor_id', label: 'Instagram transcript actor', href: 'https://apify.com/crawlerbros/instagram-transcript-scraper' },
 ] as const
-const PROVIDERS = ['apify', 'voyage', 'anthropic'] as const
+const PROVIDERS = ['apify', 'voyage', 'anthropic', 'assemblyai'] as const
 
 export function SettingsPanel({ view, onSaved }: { view: SettingsView; onSaved?: (v: SettingsView) => void }) {
   const [settings, setSettings] = useState(view.settings)
@@ -101,7 +106,12 @@ export function SettingsPanel({ view, onSaved }: { view: SettingsView; onSaved?:
 
       {ACTOR_FIELDS.map((f) => (
         <label key={f.key} className="settings__field">
-          {f.label}
+          <span className="settings__field-head">
+            {f.label}
+            <a className="settings__actor-link" href={f.href} target="_blank" rel="noreferrer">
+              view actor ↗
+            </a>
+          </span>
           <input
             value={actors[f.key] ?? ''}
             onChange={(e) => setActors((a) => ({ ...a, [f.key]: e.target.value }))}

@@ -3,8 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getDb, resetDb } from '@/lib/db/db'
 import { setSettings } from '@/lib/settings'
 import {
+  buildInstagramCreatorInput,
+  buildInstagramTranscriptInput,
   buildLinkedInCreatorInput,
   buildLinkedInKeywordInput,
+  buildLinkedInProfileInput,
   buildSubstackCreatorInput,
   buildSubstackKeywordInput,
   buildTwitterCreatorInput,
@@ -26,14 +29,31 @@ describe('input builders (pure)', () => {
     expect(input.maxPosts).toBe(200)
     expect(input.scrapeComments).toBe(false)
     expect(input.scrapeReactions).toBe(false)
-    expect(typeof input.postedLimit).toBe('string')
+    expect(input.postedLimit).toBe('week')
   })
 
-  it('LinkedIn creator: profileUrls + date sort + a per-profile cap + a DATE bound (postedLimit)', () => {
+  it('LinkedIn keyword: maps each timeframe to the actor postedLimit enum (no "past-" prefix)', () => {
+    // harvestapi/linkedin-post-search rejects "past-week" etc: Field input.postedLimit must be
+    // equal to one of "any", "1h", "24h", "week", "month", "3months", "6months", "year" (confirmed
+    // from the actor's live 400 response) — same enum shape as the profile actor, not the "past-X"
+    // strings this used to send, which made every LinkedIn keyword scrape silently return 0 posts.
+    const limitFor = (tf: Parameters<typeof buildLinkedInKeywordInput>[1]): unknown =>
+      (buildLinkedInKeywordInput(['ai'], tf) as Record<string, unknown>).postedLimit
+    expect(limitFor('all')).toBe('any')
+    expect(limitFor('24h')).toBe('24h')
+    expect(limitFor('3d')).toBe('week') // no 3-day option on the actor
+    expect(limitFor('week')).toBe('week')
+    expect(limitFor('month')).toBe('month')
+    expect(limitFor('3months')).toBe('3months')
+    expect(limitFor('custom')).toBe('any')
+  })
+
+  it('LinkedIn creator: targetUrls + a post cap (maxPosts) + a DATE bound (postedLimit)', () => {
     const input = buildLinkedInCreatorInput(['https://li/in/jane'], 'month') as Record<string, unknown>
-    expect(input.profileUrls).toEqual(['https://li/in/jane'])
-    expect(input.sortBy).toBe('date')
-    expect(typeof input.maxPostsPerProfile).toBe('number')
+    // Actor input keys are targetUrls + maxPosts — the exact names harvestapi expects (wrong names
+    // are silently ignored and the actor caps at its ~50-post default).
+    expect(input.targetUrls).toEqual(['https://li/in/jane'])
+    expect(typeof input.maxPosts).toBe('number')
     expect(input.postedLimit).toBe('month') // bounds by date, not just count (no re-paying for old posts)
   })
 
@@ -119,6 +139,39 @@ describe('input builders (pure)', () => {
     expect('dateFrom' in bare).toBe(false)
     expect('minReactions' in bare).toBe(false)
   })
+
+  it('Instagram creator: username targets + resultsLimit cap (§18)', () => {
+    const input = buildInstagramCreatorInput(['https://www.instagram.com/natgeo/'], 'month') as Record<string, unknown>
+    expect(input.username).toEqual(['https://www.instagram.com/natgeo/']) // actor accepts profile urls or handles
+    expect(typeof input.resultsLimit).toBe('number')
+    expect('searchQueries' in input).toBe(false) // the post scraper is profile-driven, not keyword
+  })
+
+  it('Instagram creator: passes onlyPostsNewerThan when a date bound is given, omits it otherwise', () => {
+    const bounded = buildInstagramCreatorInput(['natgeo'], 'week', { onlyNewerThan: '2026-07-10' }) as Record<string, unknown>
+    expect(bounded.onlyPostsNewerThan).toBe('2026-07-10')
+
+    const unbounded = buildInstagramCreatorInput(['natgeo'], 'all') as Record<string, unknown>
+    expect('onlyPostsNewerThan' in unbounded).toBe(false)
+    expect(unbounded.resultsLimit).toBe(500) // 'all' = full history at the actor ceiling
+  })
+
+  it('LinkedIn profile (§19): queries (urls or handles) + the details-only scraper mode', () => {
+    const input = buildLinkedInProfileInput(['https://www.linkedin.com/in/basiakubicka/']) as Record<string, unknown>
+    expect(input.queries).toEqual(['https://www.linkedin.com/in/basiakubicka/']) // accepts urls OR bare public ids
+    expect(input.profileScraperMode).toBe('Profile details no email ($4 per 1k)') // cheaper, no email lookup
+    expect('urls' in input).toBe(false) // the actor keys off `queries`, not `urls`
+  })
+
+  it('Instagram transcript: videoUrls + auto method, no segments (§18)', () => {
+    const input = buildInstagramTranscriptInput([
+      'https://www.instagram.com/reel/AAA/',
+      'https://www.instagram.com/p/BBB/',
+    ]) as Record<string, unknown>
+    expect(input.videoUrls).toEqual(['https://www.instagram.com/reel/AAA/', 'https://www.instagram.com/p/BBB/'])
+    expect(input.transcriptionMethod).toBe('auto') // native captions first, Whisper fallback
+    expect(input.includeSegments).toBe(false)
+  })
 })
 
 const BASE = 'https://api.apify.com/v2'
@@ -143,6 +196,74 @@ describe('runActor', () => {
     await expect(runActor('harvestapi/linkedin-post-search', { searchQueries: ['ai'] })).resolves.toEqual(
       items,
     )
+  })
+
+  it('honors a raised maxPolls ceiling: keeps polling past the default before succeeding (§18)', async () => {
+    setSettings({ apify_api_token: 'tok' })
+    let polls = 0
+    server.use(
+      http.post(`${BASE}/acts/:actor/runs`, () =>
+        HttpResponse.json({ data: { id: 'run1', defaultDatasetId: 'ds1', status: 'RUNNING' } }),
+      ),
+      http.get(`${BASE}/actor-runs/run1`, () => {
+        polls += 1
+        // Stay RUNNING for the first 5 polls (more than a tiny default would allow), then finish.
+        return HttpResponse.json({ data: { id: 'run1', status: polls >= 6 ? 'SUCCEEDED' : 'RUNNING' } })
+      }),
+      http.get(`${BASE}/datasets/ds1/items`, () => HttpResponse.json([{ shortCode: 'x', fullText: 't' }])),
+    )
+    vi.useFakeTimers()
+    try {
+      const p = runActor('crawlerbros/instagram-transcript-scraper', {}, { maxPolls: 50 })
+      await vi.advanceTimersByTimeAsync(10 * 1500 + 100)
+      await expect(p).resolves.toEqual([{ shortCode: 'x', fullText: 't' }])
+      expect(polls).toBeGreaterThanOrEqual(6)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('tolerates transient network errors during polling and still completes (§18 resilience)', async () => {
+    setSettings({ apify_api_token: 'tok' })
+    let polls = 0
+    server.use(
+      http.post(`${BASE}/acts/:actor/runs`, () =>
+        HttpResponse.json({ data: { id: 'run1', defaultDatasetId: 'ds1', status: 'RUNNING' } }),
+      ),
+      http.get(`${BASE}/actor-runs/run1`, () => {
+        polls += 1
+        if (polls <= 3) return HttpResponse.error() // transient network blips
+        return HttpResponse.json({ data: { id: 'run1', status: 'SUCCEEDED' } })
+      }),
+      http.get(`${BASE}/datasets/ds1/items`, () => HttpResponse.json([{ shortCode: 'x', fullText: 't' }])),
+    )
+    vi.useFakeTimers()
+    try {
+      const p = runActor('crawlerbros/instagram-transcript-scraper', {})
+      await vi.advanceTimersByTimeAsync(6 * 1500 + 100)
+      await expect(p).resolves.toEqual([{ shortCode: 'x', fullText: 't' }])
+      expect(polls).toBeGreaterThanOrEqual(4) // retried past the blips
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('gives up after too many CONSECUTIVE poll network errors', async () => {
+    setSettings({ apify_api_token: 'tok' })
+    server.use(
+      http.post(`${BASE}/acts/:actor/runs`, () =>
+        HttpResponse.json({ data: { id: 'run1', defaultDatasetId: 'ds1', status: 'RUNNING' } }),
+      ),
+      http.get(`${BASE}/actor-runs/run1`, () => HttpResponse.error()), // never recovers
+    )
+    vi.useFakeTimers()
+    try {
+      const expectation = expect(runActor('some/actor', {})).rejects.toThrow()
+      await vi.advanceTimersByTimeAsync(10 * 1500 + 100)
+      await expectation
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('throws when the run terminates in a FAILED status', async () => {

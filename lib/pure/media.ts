@@ -6,7 +6,7 @@
 // Precedence: document > video > image > none. The `thumbnail` is what the enrich job embeds and the
 // card shows collapsed, so image-grouping (§9) spans images + document/video thumbnails uniformly.
 
-import type { ApifyPost, PostMedia } from '@/lib/types'
+import type { ApifyInstagramPost, ApifyPost, PostMedia } from '@/lib/types'
 
 /** Runtime guard for a stored `media` value (JSON.parse output) — so a corrupt/legacy row that is
  *  valid JSON but the wrong shape is rejected (→ null) instead of trusted as a PostMedia. */
@@ -54,6 +54,28 @@ export function extractMedia(raw: ApifyPost): { media: PostMedia | null; thumbna
   }
 
   const images = (raw.postImages ?? []).map((i) => i.url).filter((u): u is string => !!u)
+  if (images.length > 0) {
+    return { media: { type: 'image', images }, thumbnail: images[0]! }
+  }
+
+  return { media: null, thumbnail: null }
+}
+
+/**
+ * Instagram media (§18). Precedence: video > image(s) > none. A Video post carries `videoUrl` with
+ * `displayUrl` as the poster; a carousel (Sidecar) fills `images[]`; a single-image post carries only
+ * `displayUrl`. A Video with no `videoUrl` degrades to its poster image rather than yielding nothing.
+ */
+export function extractInstagramMedia(
+  raw: ApifyInstagramPost,
+): { media: PostMedia | null; thumbnail: string | null } {
+  if (raw.type === 'Video' && raw.videoUrl) {
+    const poster = raw.displayUrl ?? null
+    return { media: { type: 'video', url: raw.videoUrl, poster }, thumbnail: poster }
+  }
+
+  const carousel = (raw.images ?? []).filter((u): u is string => !!u)
+  const images = carousel.length > 0 ? carousel : raw.displayUrl ? [raw.displayUrl] : []
   if (images.length > 0) {
     return { media: { type: 'image', images }, thumbnail: images[0]! }
   }

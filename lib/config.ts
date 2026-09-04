@@ -36,13 +36,18 @@ export const IMAGE_DESCRIPTION_MODEL = 'claude-sonnet-4-6'
 export const SETTINGS_DEFAULTS = {
   apify_keyword_actor_id: 'harvestapi/linkedin-post-search',
   apify_profile_actor_id: 'harvestapi/linkedin-profile-posts',
+  apify_profile_detail_actor_id: 'harvestapi/linkedin-profile-scraper', // scrapes the PROFILE itself (full details + follower count), not its posts (§19)
   apify_tweet_actor_id: 'apidojo/tweet-scraper', // ONE actor for both tweet search & profile modes
   apify_substack_actor_id: 'brilliant_gum/substack-insights-scraper', // ONE actor for both Substack modes (§17)
+  apify_instagram_actor_id: 'apify/instagram-post-scraper', // profile/creator posts (photo+video+carousel) (§18)
+  apify_instagram_transcript_actor_id: 'crawlerbros/instagram-transcript-scraper', // video → transcript (§18)
   default_market: 'ai',
 } as const
 
 // Keys that must never be returned raw over the API (PRD §11.4 masks these).
-export const SECRET_SETTING_KEYS = ['apify_api_token', 'voyage_api_key', 'anthropic_api_key'] as const
+// assemblyai_api_key is used only by the temporary ig-compare tab (app/IgCompare.tsx);
+// readonly_api_token is the bearer token for the read-only agent API (§20).
+export const SECRET_SETTING_KEYS = ['apify_api_token', 'voyage_api_key', 'anthropic_api_key', 'assemblyai_api_key', 'readonly_api_token'] as const
 
 // --- Runtime ---------------------------------------------------------------
 export const DB_PATH = process.env.DB_PATH ?? './research.db'

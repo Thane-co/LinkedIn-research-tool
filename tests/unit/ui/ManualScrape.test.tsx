@@ -53,6 +53,22 @@ describe('ManualScrape', () => {
     expect(body!.platforms).toEqual(['substack'])
   })
 
+  it('can scrape Instagram only (§18): posts platforms:["instagram"]', async () => {
+    let body: { platforms?: string[] } | null = null
+    server.use(
+      http.post('*/api/scrape', async ({ request }) => {
+        body = (await request.json()) as { platforms?: string[] }
+        return HttpResponse.json({ jobId: 'j1' }, { status: 202 })
+      }),
+      http.get('*/api/scrape/j1', () => HttpResponse.json({ id: 'j1', status: 'succeeded', inserted: 0 })),
+    )
+    render(<ManualScrape />)
+    await userEvent.selectOptions(screen.getByLabelText(/platform/i), 'instagram')
+    await userEvent.click(screen.getByRole('button', { name: /run scrape now/i }))
+    expect(await screen.findByText(/complete/i)).toBeInTheDocument()
+    expect(body!.platforms).toEqual(['instagram'])
+  })
+
   it('Substack Notes are opt-in: the toggle appears for Substack and sends includeNotes', async () => {
     let body: { includeNotes?: boolean } | null = null
     server.use(

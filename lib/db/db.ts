@@ -32,12 +32,18 @@ export function seedSettingsDefaults(db: Database.Database): void {
 // EXISTS` never alters an existing table, so new nullable columns are added here idempotently.
 const ADDITIVE_COLUMNS: { table: string; column: string; type: string }[] = [
   { table: 'posts', column: 'media', type: 'TEXT' }, // §10.3.1 post media
+  { table: 'posts', column: 'transcript', type: 'TEXT' }, // §18 video transcript
   { table: 'creators', column: 'persona', type: 'TEXT' }, // §17.2 cross-platform persona key
 ]
 
 /** Run the schema DDL idempotently against the given (or singleton) connection, then seed defaults. */
 export function migrate(db?: Database.Database): void {
   const target = db ?? getDb()
+  // WAL lets a reader run concurrently with a writer, which the read-only agent instance (§20.4)
+  // depends on: it reads the same file while a scrape commits in the main instance. journal_mode is
+  // a persistent property of the FILE, so this is a one-time upgrade for an existing db; an
+  // in-memory db reports 'memory' and ignores it.
+  target.pragma('journal_mode = WAL')
   target.exec(schemaSql)
   for (const { table, column, type } of ADDITIVE_COLUMNS) {
     try {

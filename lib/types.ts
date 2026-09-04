@@ -1,7 +1,7 @@
 // Layer 1 — shared TypeScript types (PRD §12 step 11).
 // Mirrors the SQLite schema (PRD §6) and the pure-logic I/O shapes.
 
-export type Platform = 'linkedin' | 'twitter' | 'substack'
+export type Platform = 'linkedin' | 'twitter' | 'substack' | 'instagram'
 export type ScrapeSource = 'keyword' | 'creator' | 'both'
 export type ScrapeMode = 'keyword' | 'creator' | 'both'
 export type JobStatus = 'running' | 'succeeded' | 'failed'
@@ -32,6 +32,7 @@ export interface PostRow {
   market: string | null
 
   media: string | null // JSON PostMedia (§10.3.1), null when the post has no media
+  transcript: string | null // §18: speech-to-text of a video post's audio; null until transcribed / N/A
 
   embedding: Buffer | null
   image_url: string | null // PRIMARY THUMBNAIL: first image / video poster / doc cover
@@ -167,6 +168,80 @@ export interface ApifySubstackPost {
   restackedPost?: { title?: string; url?: string; slug?: string }
   restackedPublication?: { name?: string; handle?: string }
   [key: string]: unknown
+}
+
+// Instagram post record (apify/instagram-post-scraper output). Covers photo, video, and carousel
+// (Sidecar) posts. Field names from the actor's documented output schema; raw_data preserves the rest.
+// The post scraper is profile/creator-driven (no keyword search) — transcript is a separate actor (later).
+export interface ApifyInstagramPost {
+  id?: string
+  shortCode?: string // canonical code in the /p/<shortCode>/ url — used to derive the row id
+  url?: string
+  caption?: string | null
+  type?: string // 'Image' | 'Video' | 'Sidecar' (carousel)
+  likesCount?: number
+  commentsCount?: number
+  videoViewCount?: number | null
+  timestamp?: string | null
+  ownerUsername?: string
+  ownerFullName?: string | null
+  ownerId?: string
+  displayUrl?: string | null // primary thumbnail / video poster
+  videoUrl?: string | null
+  images?: string[] // carousel image urls (Sidecar); often empty for a single-image post
+  [key: string]: unknown
+}
+
+// Instagram transcript record (crawlerbros/instagram-transcript-scraper output, §18). One item per
+// transcribed video; `fullText` is the transcript, `shortCode`/`postUrl` match it back to a post.
+export interface ApifyInstagramTranscript {
+  fullText?: string | null
+  shortCode?: string
+  postUrl?: string
+  transcriptionMethod?: string // 'native' | 'whisper'
+  [key: string]: unknown
+}
+
+// LinkedIn profile record (harvestapi/linkedin-profile-scraper output, §19). Scrapes the PROFILE
+// itself — headline/about/experience/skills + the follower & connection counts — NOT its posts.
+// Minimal shape for the fields the mapper reads; raw_data preserves the rest. experience/education/
+// skills are stored as JSON, so their element shape is left open (unknown[]).
+export interface ApifyProfile {
+  id?: string
+  publicIdentifier?: string
+  linkedinUrl?: string
+  firstName?: string
+  lastName?: string
+  name?: string
+  headline?: string | null
+  about?: string | null
+  photo?: string | null
+  // The actor may return location as a plain string or a parsed object — the mapper coerces to a string.
+  location?: string | { linkedinText?: string; text?: string } | null
+  followerCount?: number
+  connectionsCount?: number
+  experience?: unknown[]
+  education?: unknown[]
+  skills?: unknown[]
+  [key: string]: unknown
+}
+
+// --- profiles row (PRD §6.6, §19) ------------------------------------------
+export interface ProfileRow {
+  id: string // clean publicIdentifier (slug)
+  url: string | null
+  name: string | null
+  headline: string | null
+  about: string | null
+  followers: number
+  connections: number
+  location: string | null
+  avatar_url: string | null
+  experience: string | null // JSON array
+  education: string | null // JSON array
+  skills: string | null // JSON array
+  scraped_at: string
+  raw_data: string | null
 }
 
 // --- Enriched view shapes (PRD §9) -----------------------------------------

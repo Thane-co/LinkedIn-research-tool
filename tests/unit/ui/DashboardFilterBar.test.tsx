@@ -30,6 +30,13 @@ describe('DashboardFilterBar', () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ platforms: ['substack'] }))
   })
 
+  it('toggles Instagram into the platforms subset (§18)', async () => {
+    const onChange = vi.fn()
+    render(<DashboardFilterBar filters={baseFilters()} availableAuthors={authors} onChange={onChange} />)
+    await userEvent.click(screen.getByRole('button', { name: /instagram/i }))
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ platforms: ['instagram'] }))
+  })
+
   it('removes a platform when its pill is toggled off', async () => {
     const onChange = vi.fn()
     render(

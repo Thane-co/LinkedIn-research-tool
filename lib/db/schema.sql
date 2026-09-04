@@ -12,7 +12,7 @@
 -- 6.1 posts -----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS posts (
   id                TEXT PRIMARY KEY,          -- canonical post id (PRD §8.2). Tweets prefixed 'tweet-'
-  platform          TEXT NOT NULL DEFAULT 'linkedin',  -- 'linkedin' | 'twitter'
+  platform          TEXT NOT NULL DEFAULT 'linkedin',  -- 'linkedin' | 'twitter' | 'substack' | 'instagram'
   url               TEXT,                      -- canonical post url (LinkedIn activity url / tweet url)
   content           TEXT,
   author_name       TEXT,
@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS posts (
   market            TEXT,                      -- market bucket this scrape ran under, e.g. 'ai'
 
   media             TEXT,                      -- JSON PostMedia (image[]/video/document), null if none
+  transcript        TEXT,                      -- §18: speech-to-text of a video post's audio, null until transcribed
 
   -- enrichment (nullable until enrich job runs)
   embedding         BLOB,                      -- Float32[1024] of content (+image desc)
@@ -56,7 +57,7 @@ CREATE INDEX IF NOT EXISTS posts_unembedded_idx       ON posts(embedded_at) WHER
 -- 6.2 creators --------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS creators (
   id            TEXT PRIMARY KEY,              -- crypto.randomUUID()
-  platform      TEXT NOT NULL,                 -- 'linkedin' | 'twitter' | 'substack'
+  platform      TEXT NOT NULL,                 -- 'linkedin' | 'twitter' | 'substack' | 'instagram'
   profile_url   TEXT NOT NULL,                 -- normalized profile url (LinkedIn/X) or https://<pub>.substack.com
   author_id     TEXT,                          -- clean slug/handle for x-factor matching
   display_name  TEXT,
@@ -111,3 +112,25 @@ CREATE TABLE IF NOT EXISTS keywords (
   UNIQUE(market, term)
 );
 CREATE INDEX IF NOT EXISTS keywords_market_idx ON keywords(market);
+
+-- 6.6 profiles — scraped LinkedIn PROFILES (§19) ----------------------------
+-- One row per LinkedIn profile scraped by the profile-detail actor. Independent of `posts`: a profile
+-- is not a post and never enters the x-factor / dedup / enrich pipeline. `id` is the clean public
+-- identifier (slug); a re-scrape upserts (refreshes) the row.
+CREATE TABLE IF NOT EXISTS profiles (
+  id          TEXT PRIMARY KEY,            -- clean publicIdentifier (slug), e.g. 'basiakubicka'
+  url         TEXT,                        -- canonical profile url
+  name        TEXT,                        -- first + last
+  headline    TEXT,
+  about       TEXT,
+  followers   INTEGER NOT NULL DEFAULT 0,  -- followerCount
+  connections INTEGER NOT NULL DEFAULT 0,  -- connectionsCount
+  location    TEXT,
+  avatar_url  TEXT,                        -- profile photo
+  experience  TEXT,                        -- JSON array (position/company/duration/description)
+  education   TEXT,                        -- JSON array (school/degree/field)
+  skills      TEXT,                        -- JSON array (name/endorsements)
+  scraped_at  TEXT NOT NULL,               -- ISO-8601 UTC
+  raw_data    TEXT                         -- JSON.stringify of the full Apify item
+);
+CREATE INDEX IF NOT EXISTS profiles_scraped_idx ON profiles(scraped_at DESC);

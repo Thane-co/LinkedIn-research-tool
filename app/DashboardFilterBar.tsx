@@ -40,6 +40,7 @@ const PLATFORM_OPTIONS: { value: Platform; label: string }[] = [
   { value: 'linkedin', label: 'LinkedIn' },
   { value: 'twitter', label: 'Twitter' },
   { value: 'substack', label: 'Substack' },
+  { value: 'instagram', label: 'Instagram' },
 ]
 
 const PLATFORM_LABEL: Record<Platform, string> = Object.fromEntries(

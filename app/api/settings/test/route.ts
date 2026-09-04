@@ -53,9 +53,16 @@ async function testAnthropic(): Promise<ProbeResult> {
   )
 }
 
+// Gates only the temporary ig-compare tab, not core Search.
+async function testAssemblyai(): Promise<ProbeResult> {
+  const key = getKey('assemblyai_api_key')
+  if (!key) return { ok: false, error: 'API key not set' }
+  return probe(async () => okOr(await fetch('https://api.assemblyai.com/v2/transcript?limit=1', { headers: { authorization: key } })))
+}
+
 export async function POST(req: Request): Promise<NextResponse> {
   const blocked = rejectCrossOrigin(req)
   if (blocked) return blocked
-  const [apify, voyage, anthropic] = await Promise.all([testApify(), testVoyage(), testAnthropic()])
-  return NextResponse.json({ apify, voyage, anthropic })
+  const [apify, voyage, anthropic, assemblyai] = await Promise.all([testApify(), testVoyage(), testAnthropic(), testAssemblyai()])
+  return NextResponse.json({ apify, voyage, anthropic, assemblyai })
 }

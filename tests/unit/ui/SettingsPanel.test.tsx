@@ -13,9 +13,10 @@ const view = (over: Partial<SettingsView> = {}): SettingsView => ({
     anthropic_api_key: 'unset',
     apify_keyword_actor_id: 'harvestapi/linkedin-post-search',
     apify_substack_actor_id: 'brilliant_gum/substack-insights-scraper',
+    apify_instagram_actor_id: 'apify/instagram-post-scraper',
     ...over.settings,
   },
-  ready: { apify: false, voyage: false, anthropic: false, ...over.ready },
+  ready: { apify: false, voyage: false, anthropic: false, assemblyai: false, ...over.ready },
 })
 
 afterEach(() => server.resetHandlers())
@@ -32,6 +33,13 @@ describe('SettingsPanel', () => {
     expect(field).toHaveValue('brilliant_gum/substack-insights-scraper')
   })
 
+  it('shows the editable Instagram actor field with its current value + a link to the actor (§18)', () => {
+    render(<SettingsPanel view={view()} />)
+    expect(screen.getByLabelText(/instagram actor/i)).toHaveValue('apify/instagram-post-scraper')
+    const link = screen.getAllByRole('link', { name: /view actor/i })
+    expect(link.some((a) => a.getAttribute('href') === 'https://apify.com/apify/instagram-post-scraper')).toBe(true)
+  })
+
   it('surfaces a save failure instead of silently reporting success', async () => {
     server.use(http.put('*/api/settings', () => new HttpResponse(null, { status: 500 })))
     render(<SettingsPanel view={view()} />)
@@ -40,7 +48,7 @@ describe('SettingsPanel', () => {
   })
 
   it('hides the gate once both required providers are ready', () => {
-    render(<SettingsPanel view={view({ ready: { apify: true, voyage: true, anthropic: false } })} />)
+    render(<SettingsPanel view={view({ ready: { apify: true, voyage: true, anthropic: false, assemblyai: false } })} />)
     expect(screen.queryByTestId('settings-gate')).not.toBeInTheDocument()
   })
 
@@ -72,6 +80,7 @@ describe('SettingsPanel', () => {
           apify: { ok: true },
           voyage: { ok: false, error: 'HTTP 401' },
           anthropic: { ok: false, error: 'API key not set' },
+          assemblyai: { ok: false, error: 'API key not set' },
         }),
       ),
     )

@@ -4,8 +4,10 @@
 // matches on author_id NOT author_url.
 
 import { enrichPosts } from '@/jobs/enrich'
+import { transcribeInstagramVideos } from '@/jobs/transcribe'
 import { TIMEFRAME_DAYS } from '@/lib/config'
 import {
+  buildInstagramCreatorInput,
   buildLinkedInCreatorInput,
   buildLinkedInKeywordInput,
   buildSubstackCreatorInput,
@@ -24,11 +26,18 @@ import {
 } from '@/lib/db/posts.repo'
 import { mergeAndDeduplicate } from '@/lib/pure/dedup'
 import { isLikelyNonEnglish } from '@/lib/pure/lang'
-import { isSubstackContent, mapApifyPostToRow, mapApifySubstackToRow, mapApifyTweetToRow } from '@/lib/pure/mappers'
+import {
+  isSubstackContent,
+  mapApifyInstagramToRow,
+  mapApifyPostToRow,
+  mapApifySubstackToRow,
+  mapApifyTweetToRow,
+} from '@/lib/pure/mappers'
 import { computeXFactor, weightedScore } from '@/lib/pure/x-factor'
 import { getSettings } from '@/lib/settings'
 import { fetchSubstackNoteContent } from '@/lib/substack'
 import type {
+  ApifyInstagramPost,
   ApifyPost,
   ApifySubstackPost,
   ApifyTweet,
@@ -38,7 +47,7 @@ import type {
   Timeframe,
 } from '@/lib/types'
 
-type RawItem = ApifyPost | ApifyTweet | ApifySubstackPost
+type RawItem = ApifyPost | ApifyTweet | ApifySubstackPost | ApifyInstagramPost
 
 export interface RunScrapeOptions {
   platforms: Platform[]
@@ -63,6 +72,9 @@ interface ActorRun {
 
 // Drain up to this many unembedded posts after a scrape (Voyage batches internally at 100).
 const ENRICH_LIMIT = 200
+// Transcribe up to this many Instagram videos per scrape (§18) — bounded so a single transcript actor
+// run stays within the poll ceiling; the /api/transcribe route drains the rest in further batches.
+const TRANSCRIBE_LIMIT = 25
 const DAY_MS = 24 * 60 * 60 * 1000
 
 // Substack's actor bounds by an absolute date (dateFrom), not a relative enum — so compute the cutoff
@@ -121,6 +133,15 @@ function planRuns(opts: RunScrapeOptions): ActorRun[] {
       if (wantCreator && handles.length > 0 && tweetActor) {
         runs.push({ source: 'creator', platform, actorId: tweetActor, input: buildTwitterCreatorInput(handles) })
       }
+    } else if (platform === 'instagram') {
+      // Instagram uses the post scraper in CREATOR mode only (§18) — it's profile-driven, no keyword
+      // search. Target by profile url (the actor's `username` field accepts urls or handles).
+      // onlyNewerThan bounds the fetch by date so a short timeframe doesn't re-pull old posts.
+      const igActor = settings.apify_instagram_actor_id
+      const targets = creators.filter((c) => c.platform === 'instagram').map((c) => c.profile_url)
+      if (wantCreator && targets.length > 0 && igActor) {
+        runs.push({ source: 'creator', platform, actorId: igActor, input: buildInstagramCreatorInput(targets, opts.timeframe, { onlyNewerThan: timeframeDateFrom(opts.timeframe) }) })
+      }
     } else {
       // Substack likewise uses ONE actor for both modes (§17.1); creator mode targets publication urls.
       // dateFrom bounds the fetch by date so a short timeframe doesn't re-pull old posts.
@@ -177,6 +198,8 @@ function mapItem(raw: RawItem, platform: Platform, market: string): PostRow {
       return mapApifyPostToRow(raw as ApifyPost, market)
     case 'twitter':
       return mapApifyTweetToRow(raw as ApifyTweet, market)
+    case 'instagram':
+      return mapApifyInstagramToRow(raw as ApifyInstagramPost, market)
     default:
       return mapApifySubstackToRow(raw as ApifySubstackPost, market)
   }
@@ -286,6 +309,16 @@ export async function runScrape(opts: RunScrapeOptions): Promise<ScrapeStats> {
       recomputeXFactors(affectedAuthors)
     } catch (err) {
       console.error('scrape: x-factor recompute failed:', (err as Error).message)
+    }
+
+    // Transcribe Instagram videos (§18) — runs whenever the scrape touched Instagram, even with 0 new
+    // inserts, so it also backfills any earlier video posts still missing a transcript. Non-fatal.
+    if (opts.platforms.includes('instagram')) {
+      try {
+        await transcribeInstagramVideos(TRANSCRIBE_LIMIT)
+      } catch (err) {
+        console.error('scrape: instagram transcribe failed:', (err as Error).message)
+      }
     }
 
     return stats

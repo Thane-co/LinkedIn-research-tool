@@ -26,7 +26,7 @@ describe('GET /api/settings', () => {
     expect(body.settings.anthropic_api_key).toBe('unset')
     // non-secret actor-id defaults are visible
     expect(body.settings.apify_keyword_actor_id).toBe('harvestapi/linkedin-post-search')
-    expect(body.ready).toEqual({ apify: false, voyage: false, anthropic: false })
+    expect(body.ready).toEqual({ apify: false, voyage: false, anthropic: false, assemblyai: false })
   })
 
   it('reports set/ready once secrets are stored, still never leaking the raw value', async () => {
@@ -36,7 +36,7 @@ describe('GET /api/settings', () => {
     expect(body.settings.voyage_api_key).toBe('set')
     expect(body.settings.anthropic_api_key).toBe('unset')
     expect(JSON.stringify(body)).not.toContain('SEKRET') // raw never serialized
-    expect(body.ready).toEqual({ apify: true, voyage: true, anthropic: false })
+    expect(body.ready).toEqual({ apify: true, voyage: true, anthropic: false, assemblyai: false })
   })
 })
 

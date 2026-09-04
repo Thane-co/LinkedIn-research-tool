@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   extractActivityId,
+  extractInstagramHandle,
+  extractInstagramShortcode,
   extractLinkedInSlug,
   extractSubstackHandle,
   extractTwitterHandle,
+  isProxyableMediaUrl,
+  mediaProxySrc,
   normalizeProfileUrl,
   safeHref,
 } from '@/lib/pure/url'
@@ -152,5 +156,82 @@ describe('extractSubstackHandle', () => {
     expect(extractSubstackHandle('https://x.com/lara')).toBeNull()
     expect(extractSubstackHandle('noahpinion')).toBeNull()
     expect(extractSubstackHandle('')).toBeNull()
+  })
+})
+
+describe('extractInstagramHandle', () => {
+  it('extracts the username from an instagram.com profile url', () => {
+    expect(extractInstagramHandle('https://www.instagram.com/natgeo/')).toBe('natgeo')
+    expect(extractInstagramHandle('https://instagram.com/natgeo')).toBe('natgeo')
+  })
+
+  it('lowercases and keeps dots/underscores (valid IG username chars)', () => {
+    expect(extractInstagramHandle('https://www.instagram.com/Lara.Acosta_r/')).toBe('lara.acosta_r')
+  })
+
+  it('tolerates a missing scheme and a leading @', () => {
+    expect(extractInstagramHandle('instagram.com/@natgeo')).toBe('natgeo')
+  })
+
+  it('returns null for a post/reel url (no profile handle there)', () => {
+    expect(extractInstagramHandle('https://www.instagram.com/p/DLNsnpUTdVS/')).toBeNull()
+    expect(extractInstagramHandle('https://www.instagram.com/reel/DLNsnpUTdVS/')).toBeNull()
+    expect(extractInstagramHandle('https://www.instagram.com/explore/')).toBeNull()
+  })
+
+  it('returns null for non-instagram urls and bare handles (IG is URL-driven)', () => {
+    expect(extractInstagramHandle('https://x.com/natgeo')).toBeNull()
+    expect(extractInstagramHandle('natgeo')).toBeNull()
+    expect(extractInstagramHandle('')).toBeNull()
+  })
+})
+
+describe('extractInstagramShortcode', () => {
+  it('extracts the shortcode from /p/, /reel/, /tv/ urls', () => {
+    expect(extractInstagramShortcode('https://www.instagram.com/p/DLNsnpUTdVS/')).toBe('DLNsnpUTdVS')
+    expect(extractInstagramShortcode('https://www.instagram.com/reel/DV29mBcMQwp/')).toBe('DV29mBcMQwp')
+    expect(extractInstagramShortcode('https://www.instagram.com/tv/ABC123/')).toBe('ABC123')
+  })
+
+  it('returns null for a profile url or a non-instagram url', () => {
+    expect(extractInstagramShortcode('https://www.instagram.com/natgeo/')).toBeNull()
+    expect(extractInstagramShortcode('https://x.com/p/abc')).toBeNull()
+    expect(extractInstagramShortcode(null)).toBeNull()
+  })
+})
+
+describe('isProxyableMediaUrl', () => {
+  it('is true for Instagram/Facebook/LinkedIn CDN hosts (incl. subdomains)', () => {
+    expect(isProxyableMediaUrl('https://scontent-lga3-1.cdninstagram.com/v/x.jpg')).toBe(true)
+    expect(isProxyableMediaUrl('https://cdninstagram.com/x.jpg')).toBe(true)
+    expect(isProxyableMediaUrl('https://scontent.xx.fbcdn.net/v/x.jpg')).toBe(true)
+    expect(isProxyableMediaUrl('https://media.licdn.com/dms/image/x.jpg')).toBe(true)
+    expect(isProxyableMediaUrl('https://dms.licdn.com/playlist/x')).toBe(true)
+  })
+
+  it('is false for other hosts and non-http(s) schemes (SSRF guard)', () => {
+    expect(isProxyableMediaUrl('https://evil.com/cdninstagram.com')).toBe(false) // path, not host
+    expect(isProxyableMediaUrl('https://notcdninstagram.com/x.jpg')).toBe(false) // suffix must be dot-bounded
+    expect(isProxyableMediaUrl('https://notlicdn.com/x.jpg')).toBe(false) // suffix must be dot-bounded
+    expect(isProxyableMediaUrl('file:///etc/passwd')).toBe(false)
+    expect(isProxyableMediaUrl('not a url')).toBe(false)
+  })
+})
+
+describe('mediaProxySrc', () => {
+  it('routes an Instagram CDN url through the same-origin proxy (encoded)', () => {
+    const src = mediaProxySrc('https://scontent-lga3-1.cdninstagram.com/v/x.jpg?a=1&b=2')
+    expect(src).toBe(`/api/media?url=${encodeURIComponent('https://scontent-lga3-1.cdninstagram.com/v/x.jpg?a=1&b=2')}`)
+  })
+
+  it('routes a LinkedIn CDN poster through the same-origin proxy (browser blocks it direct)', () => {
+    const url = 'https://media.licdn.com/dms/image/v2/x/videocover-high/0/1?e=1&v=beta&t=z'
+    expect(mediaProxySrc(url)).toBe(`/api/media?url=${encodeURIComponent(url)}`)
+  })
+
+  it('returns undefined for a missing or unsafe url (never emits an unsafe src)', () => {
+    expect(mediaProxySrc(null)).toBeUndefined()
+    expect(mediaProxySrc(undefined)).toBeUndefined()
+    expect(mediaProxySrc('javascript:alert(1)')).toBeUndefined()
   })
 })

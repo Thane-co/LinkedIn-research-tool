@@ -5,13 +5,24 @@
 // Language filtering (isLikelyNonEnglish) is applied by the scrape job (Layer 3), not here — the
 // mapper is a pure, total mapping (map + throw-on-missing-id only).
 
-import { extractMedia } from '@/lib/pure/media'
-import { extractActivityId } from '@/lib/pure/url'
-import type { ApifyPost, ApifySubstackPost, ApifyTweet, PostRow } from '@/lib/types'
+import { extractInstagramMedia, extractMedia } from '@/lib/pure/media'
+import { extractActivityId, extractLinkedInSlug } from '@/lib/pure/url'
+import type {
+  ApifyInstagramPost,
+  ApifyPost,
+  ApifyProfile,
+  ApifySubstackPost,
+  ApifyTweet,
+  PostRow,
+  ProfileRow,
+} from '@/lib/types'
 
 const nowIso = (): string => new Date().toISOString()
 
+// Fields that are null at map time and filled by later jobs (enrich, x-factor, transcribe). Spread
+// into every mapped row so all mappers stay in sync when a new derived column is added.
 const blankEnrichment = {
+  transcript: null, // §18: filled by the transcribe job for video posts
   embedding: null,
   image_description: null,
   image_embedding: null,
@@ -155,6 +166,84 @@ function mapSubstackNoteToRow(raw: ApifySubstackPost, market: string): PostRow {
     image_url: images[0] ?? null,
     raw_data: JSON.stringify(raw),
     ...blankEnrichment,
+  }
+}
+
+/**
+ * Instagram: map a raw Apify post to a PostRow (§18). id prefixed 'instagram-' from the shortCode
+ * (the canonical /p/<shortCode>/ key), falling back to raw.id. Covers photo/video/carousel posts;
+ * shares is always 0 (Instagram exposes no reshare count). Throws when no id can be derived.
+ */
+export function mapApifyInstagramToRow(raw: ApifyInstagramPost, market: string): PostRow {
+  const code = raw.shortCode ?? raw.id
+  if (code === undefined || code === null || code === '') {
+    throw new Error('mapApifyInstagramToRow: missing shortCode and id')
+  }
+  const handle = raw.ownerUsername ?? null
+  const { media, thumbnail } = extractInstagramMedia(raw)
+
+  return {
+    id: `instagram-${code}`,
+    platform: 'instagram',
+    url: raw.url ?? (raw.shortCode ? `https://www.instagram.com/p/${raw.shortCode}/` : null),
+    content: raw.caption ?? null,
+    author_name: raw.ownerFullName ?? handle,
+    author_url: handle ? `https://www.instagram.com/${handle}/` : null,
+    author_id: handle,
+    author_type: 'profile',
+    likes: raw.likesCount ?? 0,
+    shares: 0,
+    comments: raw.commentsCount ?? 0,
+    posted_at: toIsoOrNull(raw.timestamp),
+    scraped_at: nowIso(),
+    is_repost: 0,
+    scrape_source: null,
+    market,
+    media: media ? JSON.stringify(media) : null,
+    image_url: thumbnail,
+    raw_data: JSON.stringify(raw),
+    ...blankEnrichment,
+  }
+}
+
+/** Coerce the profile actor's `location` (a plain string OR a parsed object) to a string, or null. */
+function profileLocation(loc: ApifyProfile['location']): string | null {
+  if (!loc) return null
+  if (typeof loc === 'string') return loc
+  return loc.linkedinText ?? loc.text ?? null
+}
+
+/**
+ * LinkedIn PROFILE: map a raw Apify profile item to a ProfileRow (§19). NOT a post — it carries no
+ * engagement/x-factor and never enters the posts pipeline. The row `id` is the clean `publicIdentifier`
+ * (slug — the same "match on the clean handle, never the url" invariant as posts), falling back to the
+ * slug parsed out of `linkedinUrl`. Throws when neither yields an id. experience/education/skills are
+ * stored as JSON; raw_data preserves the full item.
+ */
+export function mapApifyProfileToRow(raw: ApifyProfile): ProfileRow {
+  const id = raw.publicIdentifier ?? (raw.linkedinUrl ? extractLinkedInSlug(raw.linkedinUrl) : null)
+  if (!id) {
+    throw new Error('mapApifyProfileToRow: could not derive a profile id from publicIdentifier or url')
+  }
+  const name = [raw.firstName, raw.lastName].filter(Boolean).join(' ') || raw.name || null
+  const jsonOrNull = (v: unknown[] | undefined): string | null =>
+    v && v.length > 0 ? JSON.stringify(v) : null
+
+  return {
+    id,
+    url: raw.linkedinUrl ?? `https://www.linkedin.com/in/${id}/`,
+    name,
+    headline: raw.headline ?? null,
+    about: raw.about ?? null,
+    followers: raw.followerCount ?? 0,
+    connections: raw.connectionsCount ?? 0,
+    location: profileLocation(raw.location),
+    avatar_url: raw.photo ?? null,
+    experience: jsonOrNull(raw.experience),
+    education: jsonOrNull(raw.education),
+    skills: jsonOrNull(raw.skills),
+    scraped_at: nowIso(),
+    raw_data: JSON.stringify(raw),
   }
 }
 

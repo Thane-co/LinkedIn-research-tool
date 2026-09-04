@@ -7,10 +7,14 @@ import {
   getAuthorHistory,
   getAvailableAuthors,
   getCandidatesForClustering,
+  getCorpusStats,
+  getPostById,
   getUnembedded,
+  getVideoPostsMissingTranscript,
   insertPosts,
   searchPosts,
   setEmbedding,
+  setTranscript,
   updateXFactor,
 } from '@/lib/db/posts.repo'
 import { upsertCreator } from '@/lib/db/creators.repo'
@@ -361,5 +365,107 @@ describe('x-factor + embedding writes', () => {
     const [cand] = getCandidatesForClustering({}, true)
     expect(cand!.imageEmbedding).toEqual([0, 1, 0, 0])
     expect(cand!.image_description).toBe('a chart')
+  })
+})
+
+describe('video transcripts (§18)', () => {
+  const VIDEO = JSON.stringify({ type: 'video', url: 'https://v', poster: 'https://p' })
+  const IMAGE = JSON.stringify({ type: 'image', images: ['https://i'] })
+
+  it('insertPosts + searchPosts round-trip the transcript column', () => {
+    seed([{ id: 'a', transcript: 'hello world' }])
+    expect(searchPosts({}).posts[0]!.transcript).toBe('hello world')
+  })
+
+  it('getVideoPostsMissingTranscript returns only Instagram video posts with a url and no transcript', () => {
+    seed([
+      { id: 'instagram-vid1', platform: 'instagram', media: VIDEO, url: 'https://www.instagram.com/p/vid1/', transcript: null },
+      { id: 'instagram-vid2', platform: 'instagram', media: VIDEO, url: 'https://www.instagram.com/p/vid2/', transcript: 'done' }, // already transcribed
+      { id: 'instagram-img1', platform: 'instagram', media: IMAGE, url: 'https://www.instagram.com/p/img1/', transcript: null }, // not a video
+      { id: 'instagram-nourl', platform: 'instagram', media: VIDEO, url: null, transcript: null }, // no url to transcribe
+      { id: 'li-vid', platform: 'linkedin', media: VIDEO, url: 'https://li/v', transcript: null }, // wrong platform
+    ])
+    expect(getVideoPostsMissingTranscript(10).map((p) => p.id)).toEqual(['instagram-vid1'])
+  })
+
+  it('getVideoPostsMissingTranscript respects the limit', () => {
+    seed([
+      { id: 'instagram-a', platform: 'instagram', media: VIDEO, url: 'https://www.instagram.com/p/a/', likes: 5 },
+      { id: 'instagram-b', platform: 'instagram', media: VIDEO, url: 'https://www.instagram.com/p/b/', likes: 9 },
+    ])
+    const one = getVideoPostsMissingTranscript(1)
+    expect(one).toHaveLength(1)
+    expect(one[0]!.id).toBe('instagram-b') // most-liked first
+  })
+
+  it('setTranscript writes the transcript for a post', () => {
+    seed([{ id: 'instagram-vid1', platform: 'instagram', media: VIDEO, url: 'https://www.instagram.com/p/vid1/' }])
+    setTranscript('instagram-vid1', 'the spoken words')
+    expect(searchPosts({}).posts[0]!.transcript).toBe('the spoken words')
+    expect(getVideoPostsMissingTranscript(10)).toHaveLength(0) // now excluded
+  })
+})
+
+describe('getPostById / getCorpusStats (§20 read-only API)', () => {
+  it('getPostById returns the row or null', () => {
+    seed([{ id: 'a', content: 'hello' }])
+    expect(getPostById('a')!.content).toBe('hello')
+    expect(getPostById('missing')).toBeNull()
+  })
+
+  it('getCorpusStats reports 0 (not null) for enrichment counts on an empty corpus', () => {
+    const stats = getCorpusStats()
+    expect(stats.totalPosts).toBe(0)
+    expect(stats.enrichment).toEqual({ embedded: 0, imageEmbedded: 0, withTranscript: 0 })
+    expect(stats.platforms).toEqual([])
+    expect(stats.lastScrapedAt).toBeNull()
+  })
+
+  it('getCorpusStats summarizes platforms, markets, enrichment, and creators', () => {
+    const vec = vectorToBlob([1, 0, 0, 0])
+    seed([
+      { id: 'a', platform: 'linkedin', market: 'ai', likes: 10, author_id: 'jane', embedding: vec, image_embedding: vec, posted_at: '2026-01-01T00:00:00.000Z', scraped_at: '2026-06-01T00:00:00.000Z' },
+      { id: 'b', platform: 'linkedin', market: 'ai', likes: 5, author_id: 'joe', posted_at: '2026-02-01T00:00:00.000Z', scraped_at: '2026-06-02T00:00:00.000Z', transcript: 'words' },
+      { id: 'c', platform: 'twitter', market: 'growth', likes: 1, author_id: 'jane', posted_at: '2026-03-01T00:00:00.000Z', scraped_at: '2026-06-03T00:00:00.000Z' },
+    ])
+    upsertCreator({ platform: 'linkedin', profile_url: 'https://www.linkedin.com/in/jane', author_id: 'jane' })
+
+    const stats = getCorpusStats()
+    expect(stats.totalPosts).toBe(3)
+    const linkedin = stats.platforms.find((p) => p.platform === 'linkedin')!
+    expect(linkedin).toMatchObject({ posts: 2, authors: 2, totalLikes: 15 })
+    expect(linkedin.oldestPost).toBe('2026-01-01T00:00:00.000Z')
+    expect(linkedin.newestPost).toBe('2026-02-01T00:00:00.000Z')
+    expect(stats.markets).toEqual([
+      { market: 'ai', posts: 2 },
+      { market: 'growth', posts: 1 },
+    ])
+    expect(stats.enrichment).toEqual({ embedded: 1, imageEmbedded: 1, withTranscript: 1 })
+    expect(stats.creators).toBe(1)
+    expect(stats.lastScrapedAt).toBe('2026-06-03T00:00:00.000Z')
+  })
+})
+
+describe('searchPosts paging is never unbounded', () => {
+  it('falls back to the defaults when page/pageSize are not finite numbers', () => {
+    // A non-numeric ?pageSize= parses to NaN. Math.min/max propagate NaN, better-sqlite3 binds it as
+    // NULL, and `LIMIT NULL` in SQLite means NO LIMIT — the whole corpus in one response.
+    seed(Array.from({ length: 5 }, (_, i) => ({ id: `p${i}` })))
+    const nan = searchPosts({ page: Number.NaN, pageSize: Number.NaN })
+    expect(nan.pageSize).toBe(50)
+    expect(nan.page).toBe(1)
+    expect(nan.posts).toHaveLength(5)
+
+    const seeded = searchPosts({ pageSize: 2 })
+    expect(seeded.posts).toHaveLength(2)
+    expect(seeded.hasMore).toBe(true)
+  })
+
+  it('clamps a pageSize above the maximum and below one', () => {
+    seed([{ id: 'a' }])
+    expect(searchPosts({ pageSize: 5000 }).pageSize).toBe(200)
+    expect(searchPosts({ pageSize: 0 }).pageSize).toBe(1)
+    expect(searchPosts({ pageSize: -10 }).pageSize).toBe(1)
+    expect(searchPosts({ page: -3 }).page).toBe(1)
   })
 })

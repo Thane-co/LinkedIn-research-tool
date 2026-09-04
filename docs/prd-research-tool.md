@@ -420,6 +420,32 @@ CREATE INDEX IF NOT EXISTS keywords_market_idx ON keywords(market);
 > present as the initial market shown in the editor. Users add their own terms — no keyword set is
 > bundled or opinionated.
 
+### 6.6 `profiles` — scraped LinkedIn profiles (§19)
+
+One row per LinkedIn **profile** scraped by the profile-detail actor (§19). Independent of `posts` —
+a profile is not a post and never enters the x-factor/dedup/enrich pipeline. `id` is the clean public
+identifier (slug); a re-scrape upserts (refreshes) the row.
+
+```sql
+CREATE TABLE IF NOT EXISTS profiles (
+  id          TEXT PRIMARY KEY,            -- clean publicIdentifier (slug), e.g. 'basiakubicka'
+  url         TEXT,                        -- canonical profile url
+  name        TEXT,                        -- first + last
+  headline    TEXT,
+  about       TEXT,
+  followers   INTEGER NOT NULL DEFAULT 0,  -- followerCount
+  connections INTEGER NOT NULL DEFAULT 0,  -- connectionsCount
+  location    TEXT,
+  avatar_url  TEXT,                        -- profile photo
+  experience  TEXT,                        -- JSON array (position/company/duration/description)
+  education   TEXT,                        -- JSON array (school/degree/field)
+  skills      TEXT,                        -- JSON array (name/endorsements)
+  scraped_at  TEXT NOT NULL,               -- ISO-8601 UTC
+  raw_data    TEXT                         -- JSON.stringify of the full Apify item
+);
+CREATE INDEX IF NOT EXISTS profiles_scraped_idx ON profiles(scraped_at DESC);
+```
+
 ---
 
 ## 7. Embeddings specification
@@ -1516,3 +1542,157 @@ serializes to `platform=<comma list>` and unknown tokens are ignored server-side
 No new screen, no `personas` table, no automatic account-merging beyond the display-name-derived key,
 no day-grouping artifact, no scheduler. Substack is a platform, persona is a column, the timeline is the
 existing grid with a persona-aware creator filter. Everything else in this PRD holds verbatim.
+
+## 18. Instagram (post scraper)
+
+Instagram is added as a **fourth platform**, reusing the same scrape → map → dedup → enrich →
+x-factor pipeline and breaking no invariant above. It starts with the **post scraper**
+(`apify/instagram-post-scraper`), which pulls a profile's **photo, video, and carousel** posts (and
+their captions/engagement) — **creator mode only**. Speech-to-text transcript of video posts is a
+separate actor, deferred to a later increment.
+
+- **`Platform`** widens to `'linkedin' | 'twitter' | 'substack' | 'instagram'`. Every enum surface
+  (schema comments, the `VALID_PLATFORMS` whitelist in `/api/posts`, the `/api/scrape` default
+  platform list, filter pills, badges) includes it.
+- **Actor id:** `apify_instagram_actor_id`, seeded default `apify/instagram-post-scraper`, editable in
+  Settings. Each Settings actor field also links to its Apify store page. Missing token/actor id → skip
+  that scraper (same as the other platforms).
+- **Creator mode only (no keyword search).** The post scraper is profile-driven, so `planRuns` wires
+  Instagram for `creator`/`both` runs only; a keyword-only run produces no Instagram actor run. Input
+  builder `buildInstagramCreatorInput` uses `username` (accepts profile urls **or** handles) +
+  `resultsLimit` (per-profile cap) + `onlyPostsNewerThan` (YYYY-MM-DD date bound, mirroring the
+  LinkedIn/Substack creator date-bounding so a short timeframe doesn't re-pull old posts). Targets are
+  the creators' `profile_url`s.
+- **Mapper** `mapApifyInstagramToRow` (§10.3): id `instagram-<shortCode>` (falls back to `raw.id`);
+  canonical url `https://www.instagram.com/p/<shortCode>/`; `likesCount→likes`,
+  `commentsCount→comments`, **`shares` is always 0** (Instagram exposes no reshare count);
+  `ownerUsername→author_id`, `ownerFullName→author_name`. Media (`lib/pure/media.ts`
+  `extractInstagramMedia`): `type:'Video'` + `videoUrl` → video (poster = `displayUrl`); a Sidecar
+  fills `images[]` → image carousel; a single-image post uses `displayUrl`.
+- **Creator add** (§11.2): an `instagram.com` url detects platform `instagram`;
+  `extractInstagramHandle` derives the clean username as `author_id`. Like Substack, Instagram is
+  **URL-driven** — a bare `@handle`/word stays **Twitter** (ambiguous namespaces). A post/reel url
+  (`/p/…`, `/reel/…`) carries no profile handle → rejected. Detection order: `linkedin.com` →
+  `substack.com` → `instagram.com` → Twitter.
+- **x-factor, dedup, grouping, filters, persona** all work unchanged — an Instagram post is just a
+  `PostRow`, and it participates in the §17 cross-platform persona timeline like any other platform.
+
+## 19. LinkedIn profile scraper (profile details + follower count)
+
+A **fifth Apify integration** that scrapes a single LinkedIn **profile** (not its posts): headline,
+about, experience, education, skills, location — and the two engagement numbers the research
+workflow wants, **`followerCount`** and **`connectionsCount`**. Unlike every scraper in §10/§17/§18,
+this one does **not** produce `PostRow`s and does **not** touch the posts/dedup/x-factor/enrich
+pipeline. It stores one row per profile in a dedicated **`profiles`** table and is driven by its own
+thin route + a small Settings panel. It reuses the existing `runActor` client unchanged.
+
+- **Actor id:** `apify_profile_detail_actor_id`, seeded default `harvestapi/linkedin-profile-scraper`,
+  editable in Settings (with a link to its Apify store page). Distinct from `apify_profile_actor_id`
+  (`harvestapi/linkedin-profile-posts`), which scrapes a profile's **posts** — this one scrapes the
+  **profile itself**. Missing token → the route 412s with `{ needs: ['apify_api_token'] }` (same gate
+  shape as `/api/scrape`); missing/blank actor id → the job throws a clear error.
+- **Input builder** `buildLinkedInProfileInput(queries)` → `{ queries, profileScraperMode }`. The
+  actor's `queries` field accepts **either** full profile urls **or** bare public identifiers
+  (`basiakubicka`); `profileScraperMode` defaults to the cheaper `'Profile details no email
+  ($4 per 1k)'` tier (no email lookup — the research use case doesn't need it).
+- **Mapper** `mapApifyProfileToRow` (pure, Layer 0, 100% coverage): derives the row **`id` from the
+  clean `publicIdentifier`** (the slug — the same "match on the clean handle, never the url" invariant
+  as posts), falling back to the slug parsed out of `linkedinUrl`; throws when neither yields an id.
+  Maps `followerCount`/`connectionsCount` (default 0), `headline`, `about`, `location`, `photo`,
+  `firstName`/`lastName` → `name`, and stores `experience`/`education`/`skills` as **JSON `TEXT`**
+  columns (the arrays the profile-rewrite workflow reads). `raw_data` preserves the full item.
+- **`profiles` table (§6.6):** `id` (clean public identifier) PRIMARY KEY, `url`, `name`, `headline`,
+  `about`, `followers` INTEGER, `connections` INTEGER, `location`, `avatar_url`, `experience`/
+  `education`/`skills` (JSON `TEXT`), `scraped_at` (ISO-8601 UTC), `raw_data` (JSON `TEXT`). Created by
+  `CREATE TABLE IF NOT EXISTS` in `schema.sql` (fresh + legacy dbs alike; no additive-column migration
+  needed for a brand-new table). Repo `profiles.repo.ts`: `upsertProfile` (INSERT … ON CONFLICT(id) DO
+  UPDATE — a re-scrape refreshes the row), `getProfile(id)`, `getProfileByUrl(url)`, `listProfiles()`
+  (newest `scraped_at` first).
+- **Job** `jobs/scrape-profile.ts` `scrapeProfile(query)`: `runActor(actorId, buildLinkedInProfileInput([query]))`
+  → take the first returned item → `mapApifyProfileToRow` → `upsertProfile` → return the row. Runs
+  **synchronously** (a single profile is one fast actor run, unlike the multi-actor post scrape), so
+  there is **no `scrape_jobs` row and no poll loop** — the route awaits it directly. Throws (surfaced
+  as a 502 by the route) when the actor returns no profile.
+- **Route** `POST /api/profile` (thin, `force-dynamic`): `rejectCrossOrigin` → token gate (412) →
+  `{ query }` body → `scrapeProfile` → `{ profile }`. `GET /api/profile` returns `{ profiles }` (the
+  stored history) so the panel can list previously-scraped profiles. Actor/network failure → 502
+  `{ error }`.
+- **UI** `ProfileScrape.tsx` (Settings screen, below Manual Scrape): a url/handle input + "Scrape
+  profile" button → `apiFetch('/api/profile', POST)`; on success renders the follower + connection
+  counts, headline, and about, and lists the stored profiles. A 412 shows the "add your Apify key in
+  Settings" prompt (same pattern as Manual Scrape). Scraped/untrusted urls render via `safeHref`.
+- **Out of scope / invariants held:** profiles are **not** posts — no entry in `posts`, no x-factor,
+  no embeddings, no dedup, no persona timeline. Keys stay BYO from `settings` (never `process.env`,
+  never logged). This adds a table and a route but breaks none of the §6/§8/§10 post invariants.
+
+---
+
+## 20. Read-only API for external agents
+
+A stable, token-gated, **read-only** surface at `/api/v1` so an external agent (Hermes) can research
+the stored corpus — search with the full filter set, group by image, cluster by content, list
+creators/authors/keywords/profiles — **without any ability to scrape, enrich, write, or read keys.**
+
+### 20.1 Invariants
+- **GET-only by construction.** Every `/api/v1` route module exports **only** `GET`. No POST/PUT/
+  DELETE handler may ever be added there; any other verb is a framework 405. A test asserts this
+  across every v1 module — adding a mutating export breaks the build's test gate, by design.
+- **One query implementation.** `/api/posts` (dashboard) and `/api/v1/posts` (agent) both call
+  `runPostsQuery()` in `lib/posts-query.ts`. Filters, grouping, and response shape are shared, so
+  the agent can never see a different corpus than the UI. Do not fork the filter parsing.
+- **Never serialize** `embedding`, `image_embedding`, or `raw_data` — on posts or profiles. The
+  shared `serializePost()` strips them; `/api/v1/profiles` strips `raw_data` explicitly.
+- **No secrets, ever.** The manifest and OpenAPI documents are static descriptions. `/api/v1` has no
+  settings endpoint, and `readonly_api_token` is in `SECRET_SETTING_KEYS`, so `GET /api/settings`
+  masks it to `'set'`/`'unset'` like every other credential.
+
+### 20.2 Auth
+- Bearer token in `settings.readonly_api_token` (BYO storage rule, §6.4 — never `process.env`,
+  never code, never logged). Managed by `scripts/api-token.mjs` (`npm run api:token`,
+  `-- --show` / `--rotate` / `--revoke`).
+- `lib/api-readonly.ts` `requireReadToken(req)` — the first line of every v1 handler.
+  - **503** when no token is configured. **Fail closed**: an unconfigured API is off, never open.
+  - **401** when the token is missing or wrong. Compared with `timingSafeEqual` on equal-length
+    buffers (length mismatch short-circuits).
+  - Read from `Authorization: Bearer <t>` or `x-api-key: <t>` **only**. A `?token=` query param is
+    never accepted — it would leak into shell history, proxy logs, and referers.
+
+### 20.3 Endpoints
+All GET, all under `/api/v1`, all token-gated, all `force-dynamic`.
+
+| Route | Returns |
+| --- | --- |
+| `/api/v1` | Manifest: every endpoint, parameter, enum, default, and what the API *cannot* do. |
+| `/api/v1/openapi.json` | The same surface as an OpenAPI 3.1 document. |
+| `/api/v1/stats` | `getCorpusStats()` — posts/authors/likes/date-range per platform, posts per market, enrichment counts, creator count, `lastScrapedAt`. The orienting call. |
+| `/api/v1/posts` | `runPostsQuery()` — the §11.1 filter set, paginated, or `imageGroups` / `contentClusters` under `groupByImage` / `discoverTrends` (§9). Plus `q` as an alias for `keywords`. |
+| `/api/v1/posts/{id}` | One serialized post (404 when absent). |
+| `/api/v1/authors` | `getAvailableAuthors(filters)` — the `author_id` values to filter by. |
+| `/api/v1/creators` | `listCreators({tier,tag,platform})`. |
+| `/api/v1/keywords` | `listKeywords()` grouped by market. |
+| `/api/v1/profiles` | `listProfiles()` minus `raw_data`. |
+
+`lib/openapi.ts` holds **one** endpoint table driving both the manifest and the OpenAPI document, so
+the two can't drift. Filter params are defined once in `FILTER_PARAMS`.
+
+### 20.4 Read-only server mode
+`/api/v1` is read-only, but the app's own routes (`POST /api/scrape`, `/api/transcribe`, the
+ig-compare actors, settings) are **unauthenticated on localhost** — anything that can reach the port
+can spend Apify credits. Handing an agent a base url is documentation, not a control.
+
+`middleware.ts`, when `READONLY_SERVER=1`, applies two rules:
+1. **Every non-GET request is refused with 403**, whatever the path. Airtight because **every
+   side-effecting route in this app is POST/PUT/DELETE and every GET route only reads** — a rule that
+   must hold for any new route.
+2. **Only `/api/v1` is served**; every other path (the UI, `/api/posts`, `/api/creators`,
+   `/api/settings`) is 403. Deny-by-default, so path-normalization tricks fail closed. Without this
+   the bearer token would gate nothing, since the app's own GET routes are unauthenticated and
+   return the same data — and `api:token --revoke` would revoke nothing.
+
+Run a second instance for the agent (`npm run start:agent`, port 3100, same SQLite file; `migrate()`
+sets `journal_mode = WAL` so a reader runs concurrently with the main instance's writes). With the
+env var unset the middleware is inert and the normal instance behaves exactly as before.
+
+**Still true:** both instances bind `127.0.0.1`, and on the MAIN instance the app's own GET routes
+stay unauthenticated, so the token is a real boundary only on a `start:agent` instance. Do not expose
+either port to a network without putting real auth in front of it.

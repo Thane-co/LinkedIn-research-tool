@@ -26,21 +26,21 @@ export interface PostFilters {
 
 const POST_COLUMNS = `
   id, platform, url, content, author_name, author_url, author_id, author_type,
-  likes, shares, comments, posted_at, scraped_at, is_repost, scrape_source, market, media,
+  likes, shares, comments, posted_at, scraped_at, is_repost, scrape_source, market, media, transcript,
   embedding, image_url, image_description, image_embedding, embedded_at,
   weighted_score, creator_baseline, x_factor, raw_data
 `
 
 const INSERT_SQL = `INSERT OR IGNORE INTO posts (${POST_COLUMNS.replace(/\s+/g, ' ').trim()}) VALUES (
   @id, @platform, @url, @content, @author_name, @author_url, @author_id, @author_type,
-  @likes, @shares, @comments, @posted_at, @scraped_at, @is_repost, @scrape_source, @market, @media,
+  @likes, @shares, @comments, @posted_at, @scraped_at, @is_repost, @scrape_source, @market, @media, @transcript,
   @embedding, @image_url, @image_description, @image_embedding, @embedded_at,
   @weighted_score, @creator_baseline, @x_factor, @raw_data
 )`
 
 const DAY_MS = 24 * 60 * 60 * 1000
-const DEFAULT_PAGE_SIZE = 50
-const MAX_PAGE_SIZE = 200
+export const DEFAULT_PAGE_SIZE = 50
+export const MAX_PAGE_SIZE = 200
 
 export function insertPosts(posts: PostRow[]): { inserted: number } {
   const db = getDb()
@@ -155,8 +155,13 @@ export function searchPosts(filters: PostFilters): {
     db.prepare(`SELECT COUNT(*) AS n FROM posts ${clause}`).get(...params) as { n: number }
   ).n
 
-  const page = Math.max(1, filters.page ?? 1)
-  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, filters.pageSize ?? DEFAULT_PAGE_SIZE))
+  // Clamp defensively: a non-finite page/pageSize would survive Math.min/Math.max as NaN, bind as
+  // NULL, and turn `LIMIT ?` into an unbounded scan. This layer owns the invariant regardless of
+  // who is calling it (the route parser also drops non-numeric params).
+  const finite = (value: number | undefined, fallback: number): number =>
+    value !== undefined && Number.isFinite(value) ? value : fallback
+  const page = Math.max(1, Math.floor(finite(filters.page, 1)))
+  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(finite(filters.pageSize, DEFAULT_PAGE_SIZE))))
   const offset = (page - 1) * pageSize
 
   const posts = db
@@ -193,6 +198,77 @@ export function getCandidatesForClustering(
     textEmbedding: blobToVector(r.embedding),
     imageEmbedding: blobToVector(r.image_embedding),
   }))
+}
+
+/** One post by id, or null — powers the read-only API's single-post lookup (§20). */
+export function getPostById(id: string): PostRow | null {
+  return (getDb().prepare(`SELECT ${POST_COLUMNS} FROM posts WHERE id = ?`).get(id) as PostRow) ?? null
+}
+
+/** Per-platform / per-market corpus summary + enrichment coverage (§20) — what an agent reads first
+ *  to know what is actually in the DB before it starts filtering. */
+export interface CorpusStats {
+  totalPosts: number
+  platforms: {
+    platform: Platform
+    posts: number
+    authors: number
+    totalLikes: number
+    oldestPost: string | null
+    newestPost: string | null
+  }[]
+  markets: { market: string; posts: number }[]
+  enrichment: { embedded: number; imageEmbedded: number; withTranscript: number }
+  creators: number
+  lastScrapedAt: string | null
+}
+
+export function getCorpusStats(): CorpusStats {
+  const db = getDb()
+  const platforms = db
+    .prepare(
+      `SELECT platform, COUNT(*) AS posts, COUNT(DISTINCT author_id) AS authors,
+              SUM(likes) AS totalLikes, MIN(posted_at) AS oldestPost, MAX(posted_at) AS newestPost
+       FROM posts GROUP BY platform ORDER BY posts DESC`,
+    )
+    .all() as CorpusStats['platforms']
+  const markets = db
+    .prepare(
+      `SELECT market, COUNT(*) AS posts FROM posts WHERE market IS NOT NULL
+       GROUP BY market ORDER BY posts DESC`,
+    )
+    .all() as CorpusStats['markets']
+  const counts = db
+    .prepare(
+      `SELECT COUNT(*) AS totalPosts,
+              SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) AS embedded,
+              SUM(CASE WHEN image_embedding IS NOT NULL THEN 1 ELSE 0 END) AS imageEmbedded,
+              SUM(CASE WHEN transcript IS NOT NULL THEN 1 ELSE 0 END) AS withTranscript,
+              MAX(scraped_at) AS lastScrapedAt
+       FROM posts`,
+    )
+    .get() as {
+    totalPosts: number
+    embedded: number | null
+    imageEmbedded: number | null
+    withTranscript: number | null
+    lastScrapedAt: string | null
+  }
+  const creators = (db.prepare('SELECT COUNT(*) AS n FROM creators').get() as { n: number }).n
+
+  return {
+    totalPosts: counts.totalPosts,
+    platforms,
+    markets,
+    // SUM over zero rows is NULL in SQLite — report 0, never null.
+    enrichment: {
+      embedded: counts.embedded ?? 0,
+      imageEmbedded: counts.imageEmbedded ?? 0,
+      withTranscript: counts.withTranscript ?? 0,
+    },
+    creators,
+    lastScrapedAt: counts.lastScrapedAt,
+  }
 }
 
 export function getAuthorHistory(authorId: string): PostRow[] {
@@ -275,6 +351,40 @@ export function getAvailableAuthors(filters: PostFilters): AvailableAuthor[] {
       }
     })
     .sort((a, b) => (a.author_name ?? a.author_id).localeCompare(b.author_name ?? b.author_id))
+}
+
+/**
+ * Instagram video posts still needing a transcript (§18): a video (media.type='video') with a url to
+ * transcribe and no transcript yet. Ordered most-liked first so a bounded run transcribes the posts
+ * that matter most. json_extract reads the media JSON; a null/non-video media is excluded.
+ */
+export function getVideoPostsMissingTranscript(limit: number): PostRow[] {
+  return getDb()
+    .prepare(
+      `SELECT ${POST_COLUMNS} FROM posts
+       WHERE platform = 'instagram' AND transcript IS NULL AND url IS NOT NULL
+         AND json_extract(media, '$.type') = 'video'
+       ORDER BY likes DESC LIMIT ?`,
+    )
+    .all(limit) as PostRow[]
+}
+
+/** Count Instagram video posts still awaiting a transcript (§18) — drives "remaining" in the job. */
+export function countVideoPostsMissingTranscript(): number {
+  return (
+    getDb()
+      .prepare(
+        `SELECT COUNT(*) AS n FROM posts
+         WHERE platform = 'instagram' AND transcript IS NULL AND url IS NOT NULL
+           AND json_extract(media, '$.type') = 'video'`,
+      )
+      .get() as { n: number }
+  ).n
+}
+
+/** Write a post's video transcript (§18). */
+export function setTranscript(id: string, transcript: string): void {
+  getDb().prepare('UPDATE posts SET transcript = ? WHERE id = ?').run(transcript, id)
 }
 
 export function updateXFactor(

@@ -5,6 +5,7 @@
 import { CreatorManager } from '@/app/CreatorManager'
 import { KeywordsEditor } from '@/app/KeywordsEditor'
 import { ManualScrape } from '@/app/ManualScrape'
+import { ProfileScrape } from '@/app/ProfileScrape'
 import { ScrapeHistory } from '@/app/ScrapeHistory'
 import { SettingsPanel, type SettingsView } from '@/app/SettingsPanel'
 
@@ -12,7 +13,7 @@ export function ScrapeSettings({ view, onSaved }: { view: SettingsView; onSaved?
   return (
     <div className="scrape-settings">
       <header>
-        <h1>Scrape Settings</h1>
+        <h1>Settings</h1>
         <p>Manage your API keys, creator list, and keywords.</p>
       </header>
 
@@ -20,6 +21,7 @@ export function ScrapeSettings({ view, onSaved }: { view: SettingsView; onSaved?
       <CreatorManager />
       <KeywordsEditor />
       <ManualScrape />
+      <ProfileScrape />
       <ScrapeHistory />
     </div>
   )

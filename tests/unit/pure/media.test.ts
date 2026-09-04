@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { extractMedia, isPostMedia } from '@/lib/pure/media'
-import type { ApifyPost } from '@/lib/types'
+import { extractInstagramMedia, extractMedia, isPostMedia } from '@/lib/pure/media'
+import type { ApifyInstagramPost, ApifyPost } from '@/lib/types'
 
 describe('extractMedia', () => {
   it('extracts a single image and uses it as the thumbnail', () => {
@@ -71,6 +71,48 @@ describe('extractMedia', () => {
   it('skips images with no url', () => {
     const raw = { postImages: [{}, { url: 'b' }] } as ApifyPost
     expect(extractMedia(raw)).toEqual({ media: { type: 'image', images: ['b'] }, thumbnail: 'b' })
+  })
+})
+
+describe('extractInstagramMedia (§18)', () => {
+  it('extracts a single image from displayUrl, thumbnail = it', () => {
+    const raw = { type: 'Image', displayUrl: 'https://ig/img.jpg', images: [] } as unknown as ApifyInstagramPost
+    expect(extractInstagramMedia(raw)).toEqual({
+      media: { type: 'image', images: ['https://ig/img.jpg'] },
+      thumbnail: 'https://ig/img.jpg',
+    })
+  })
+
+  it('extracts a carousel (Sidecar) from the images array, thumbnail = first', () => {
+    const raw = { type: 'Sidecar', displayUrl: 'a', images: ['a', 'b', 'c'] } as unknown as ApifyInstagramPost
+    expect(extractInstagramMedia(raw)).toEqual({
+      media: { type: 'image', images: ['a', 'b', 'c'] },
+      thumbnail: 'a',
+    })
+  })
+
+  it('extracts a video (poster = displayUrl); video wins', () => {
+    const raw = {
+      type: 'Video',
+      videoUrl: 'https://ig/reel.mp4',
+      displayUrl: 'https://ig/poster.jpg',
+    } as unknown as ApifyInstagramPost
+    expect(extractInstagramMedia(raw)).toEqual({
+      media: { type: 'video', url: 'https://ig/reel.mp4', poster: 'https://ig/poster.jpg' },
+      thumbnail: 'https://ig/poster.jpg',
+    })
+  })
+
+  it('falls back to an image when type is Video but videoUrl is missing', () => {
+    const raw = { type: 'Video', videoUrl: null, displayUrl: 'https://ig/poster.jpg' } as unknown as ApifyInstagramPost
+    expect(extractInstagramMedia(raw)).toEqual({
+      media: { type: 'image', images: ['https://ig/poster.jpg'] },
+      thumbnail: 'https://ig/poster.jpg',
+    })
+  })
+
+  it('returns { null, null } when there is no media at all', () => {
+    expect(extractInstagramMedia({} as ApifyInstagramPost)).toEqual({ media: null, thumbnail: null })
   })
 })
 

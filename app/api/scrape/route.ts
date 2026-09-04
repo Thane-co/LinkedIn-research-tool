@@ -27,7 +27,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     market?: string
     includeNotes?: boolean
   }
-  const platforms = body.platforms ?? ['linkedin', 'twitter', 'substack']
+  const platforms = body.platforms ?? ['linkedin', 'twitter', 'substack', 'instagram']
   const mode = body.mode ?? 'both'
   const timeframe = body.timeframe ?? 'week'
   const market = body.market ?? getSettings().default_market ?? 'ai'

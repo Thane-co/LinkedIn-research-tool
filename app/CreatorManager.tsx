@@ -9,7 +9,7 @@ import { apiFetch } from '@/lib/api-client'
 
 interface Creator {
   id: string
-  platform: 'linkedin' | 'twitter' | 'substack'
+  platform: 'linkedin' | 'twitter' | 'substack' | 'instagram'
   profile_url: string
   author_id: string | null
   display_name: string | null
@@ -123,10 +123,13 @@ export function CreatorManager() {
   const nameOf = (c: Creator): string => c.display_name ?? c.author_id ?? c.profile_url
 
   return (
-    <section className="creators">
-      <div className="creators__head">
+    <details className="creators" open>
+      <summary className="creators__summary">
         <h2>Creators</h2>
         <span className="creators__count">{creators.length} tracked</span>
+      </summary>
+
+      <div className="creators__body">
         <div className="creators__head-actions">
           <label className="creators__csv">
             Upload CSV
@@ -136,68 +139,68 @@ export function CreatorManager() {
             Bulk import
           </button>
         </div>
-      </div>
 
-      {error && (
-        <p className="creators__error" role="alert">
-          {error}
-        </p>
-      )}
+        {error && (
+          <p className="creators__error" role="alert">
+            {error}
+          </p>
+        )}
 
-      {showBulk && (
-        <div className="creators__bulk">
+        {showBulk && (
+          <div className="creators__bulk">
+            <label>
+              Bulk import (one per line)
+              <textarea value={bulk} onChange={(e) => setBulk(e.target.value)} rows={4} />
+            </label>
+            <button type="button" onClick={bulkImport}>
+              Import
+            </button>
+          </div>
+        )}
+
+        <div className="creators__add">
           <label>
-            Bulk import (one per line)
-            <textarea value={bulk} onChange={(e) => setBulk(e.target.value)} rows={4} />
+            Profile URL or @handle
+            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="LinkedIn / X / Substack / Instagram URL, or @handle" />
           </label>
-          <button type="button" onClick={bulkImport}>
-            Import
+          <label>
+            Tags
+            <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="ai, founder" />
+          </label>
+          <label>
+            Person
+            <input
+              value={person}
+              onChange={(e) => setPerson(e.target.value)}
+              placeholder="auto from name — set to link accounts"
+            />
+          </label>
+          <button type="button" onClick={add}>
+            Add
           </button>
         </div>
-      )}
 
-      <div className="creators__add">
-        <label>
-          Profile URL or @handle
-          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="LinkedIn URL, X URL, or @handle" />
-        </label>
-        <label>
-          Tags
-          <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="ai, founder" />
-        </label>
-        <label>
-          Person
-          <input
-            value={person}
-            onChange={(e) => setPerson(e.target.value)}
-            placeholder="auto from name — set to link accounts"
-          />
-        </label>
-        <button type="button" onClick={add}>
-          Add
-        </button>
+        <ul className="creators__list">
+          {creators.map((c) => (
+            <li key={c.id} className="creators__row">
+              <span className="creators__name">{nameOf(c)}</span>
+              <span className={`badge badge--platform badge--${c.platform}`}>{c.platform}</span>
+              <span className="creators__slug">{c.profile_url}</span>
+              <span className="creators__tags">
+                {c.persona && <span className="chip chip--person" title="person (links accounts across platforms)">👤 {c.persona}</span>}
+                {parseTagChips(c.tags).map((t) => (
+                  <span key={t} className="chip chip--tag">
+                    {t}
+                  </span>
+                ))}
+              </span>
+              <button type="button" aria-label={`remove ${nameOf(c)}`} onClick={() => remove(c.id)}>
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
       </div>
-
-      <ul className="creators__list">
-        {creators.map((c) => (
-          <li key={c.id} className="creators__row">
-            <span className="creators__name">{nameOf(c)}</span>
-            <span className={`badge badge--platform badge--${c.platform}`}>{c.platform}</span>
-            <span className="creators__slug">{c.profile_url}</span>
-            <span className="creators__tags">
-              {c.persona && <span className="chip chip--person" title="person (links accounts across platforms)">👤 {c.persona}</span>}
-              {parseTagChips(c.tags).map((t) => (
-                <span key={t} className="chip chip--tag">
-                  {t}
-                </span>
-              ))}
-            </span>
-            <button type="button" aria-label={`remove ${nameOf(c)}`} onClick={() => remove(c.id)}>
-              Remove
-            </button>
-          </li>
-        ))}
-      </ul>
-    </section>
+    </details>
   )
 }

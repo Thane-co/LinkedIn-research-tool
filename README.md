@@ -78,6 +78,9 @@ npm start              # serve the production build locally
 npm test               # full test suite (Vitest)
 npm run test:coverage  # coverage report
 npm run typecheck      # tsc --noEmit (strict)
+
+npm run api:token      # create/show the read-only API token (--show / --rotate / --revoke)
+npm run start:agent    # read-only instance on port 3100 (refuses every write)
 ```
 
 Everything is local — no cloud, no account, no deployment. Your database lives in `research.db` in the
@@ -85,6 +88,26 @@ project folder (git-ignored; it holds your keys + scraped data — don't share i
 
 - **Product spec / source of truth:** [docs/prd-research-tool.md](docs/prd-research-tool.md)
 - **Working rules & invariants:** [CLAUDE.md](CLAUDE.md)
+- **Read-only API for agents:** [docs/readonly-api.md](docs/readonly-api.md)
+
+---
+
+## Read-only API for agents
+
+If you want an AI agent to research the corpus for you, there's a token-gated, read-only HTTP API at
+`/api/v1`: the full search filter set, group-by-image, and content clustering, plus the creator,
+author, keyword, and profile lists. It **cannot** scrape, transcribe, write, or read your API keys.
+
+```bash
+npm run api:token      # prints the bearer token (created on first run)
+npm run build && npm run start:agent
+curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:3100/api/v1/stats
+```
+
+`start:agent` runs with `READONLY_SERVER=1`, which refuses every non-GET request on that port **and**
+serves nothing but `/api/v1`. So the scraping routes are unreachable, an agent cannot spend your
+Apify credits, and the token is the only way in. Full reference:
+[docs/readonly-api.md](docs/readonly-api.md).
 
 ---
 

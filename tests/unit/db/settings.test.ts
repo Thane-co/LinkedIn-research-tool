@@ -37,8 +37,8 @@ describe('getKey', () => {
 
 describe('readiness', () => {
   it('reports which providers have their required key set', () => {
-    expect(readiness()).toEqual({ apify: false, voyage: false, anthropic: false })
+    expect(readiness()).toEqual({ apify: false, voyage: false, anthropic: false, assemblyai: false })
     setSettings({ apify_api_token: 'a', voyage_api_key: 'v' })
-    expect(readiness()).toEqual({ apify: true, voyage: true, anthropic: false })
+    expect(readiness()).toEqual({ apify: true, voyage: true, anthropic: false, assemblyai: false })
   })
 })

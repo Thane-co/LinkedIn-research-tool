@@ -4,7 +4,15 @@
 
 import { fetchWithTimeout } from '@/lib/http'
 import { getKey } from '@/lib/settings'
-import type { ApifyPost, ApifySubstackPost, ApifyTweet, Timeframe } from '@/lib/types'
+import type {
+  ApifyInstagramPost,
+  ApifyInstagramTranscript,
+  ApifyPost,
+  ApifyProfile,
+  ApifySubstackPost,
+  ApifyTweet,
+  Timeframe,
+} from '@/lib/types'
 
 /** Optional bounds shared by the Substack builders (§10.2). */
 export interface SubstackOpts {
@@ -26,14 +34,18 @@ const START_TIMEOUT_MS = 30_000
 const POLL_TIMEOUT_MS = 30_000
 const ITEMS_TIMEOUT_MS = 60_000
 
-// Timeframe -> actor-specific bounds (PRD §10.2). Values chosen to bound each scrape sensibly.
+// Timeframe -> actor-specific bounds (PRD §10.2). harvestapi/linkedin-post-search rejects "past-X"
+// strings: Field input.postedLimit must be one of "any"|"1h"|"24h"|"week"|"month"|"3months"|
+// "6months"|"year" (confirmed from the actor's live 400 response) — same enum as the profile actor
+// below, not the "past-X" values this used to send, which made every LinkedIn keyword scrape
+// silently return 0 posts (non-fatal per-run catch masked it as an empty result, not a failure).
 const POSTED_LIMIT: Record<Timeframe, string> = {
   all: 'any',
-  '24h': 'past-24h',
-  '3d': 'past-week',
-  week: 'past-week',
-  month: 'past-month',
-  '3months': 'past-month',
+  '24h': '24h',
+  '3d': 'week', // no 3-day option on the actor
+  week: 'week',
+  month: 'month',
+  '3months': '3months',
   custom: 'any',
 }
 const MAX_POSTS_PER_PROFILE: Record<Timeframe, number> = {
@@ -85,11 +97,14 @@ export function buildLinkedInKeywordInput(keywords: string[], timeframe: Timefra
 }
 
 export function buildLinkedInCreatorInput(profileUrls: string[], timeframe: Timeframe): object {
+  // harvestapi/linkedin-profile-posts input keys are `targetUrls` + `maxPosts` (NOT profileUrls /
+  // maxPostsPerProfile). Sending the wrong key names is silently ignored by the actor, which then
+  // falls back to its own default (~50 posts) and returns only the most-recent page — so a creator
+  // scrape never reached back a year. Names verified against the actor's live input schema.
   return {
-    profileUrls,
-    maxPostsPerProfile: MAX_POSTS_PER_PROFILE[timeframe],
+    targetUrls: profileUrls,
+    maxPosts: MAX_POSTS_PER_PROFILE[timeframe],
     postedLimit: PROFILE_POSTED_LIMIT[timeframe], // bound by DATE, not just count (§10.2)
-    sortBy: 'date',
   }
 }
 
@@ -165,6 +180,50 @@ export function buildSubstackCreatorInput(
   }
 }
 
+/**
+ * Instagram creator input (§18) for apify/instagram-post-scraper. The `username` field accepts bare
+ * handles OR full profile urls; `resultsLimit` caps posts per profile. There is NO keyword mode — the
+ * post scraper is profile-driven. `onlyPostsNewerThan` (YYYY-MM-DD) bounds by date so a short timeframe
+ * doesn't re-pull (and re-pay for) old posts, mirroring the LinkedIn/Substack creator bound.
+ */
+export function buildInstagramCreatorInput(
+  targets: string[],
+  timeframe: Timeframe,
+  opts?: { onlyNewerThan?: string },
+): object {
+  return {
+    username: targets,
+    resultsLimit: MAX_POSTS_PER_PROFILE[timeframe],
+    ...(opts?.onlyNewerThan !== undefined && { onlyPostsNewerThan: opts.onlyNewerThan }),
+  }
+}
+
+/**
+ * Instagram transcript input (§18) for crawlerbros/instagram-transcript-scraper. `videoUrls` are the
+ * post/reel urls to transcribe; `transcriptionMethod:'auto'` tries Instagram's native captions first,
+ * then falls back to Whisper. Segments are off — we only store the single-string transcript.
+ */
+export function buildInstagramTranscriptInput(videoUrls: string[]): object {
+  return {
+    videoUrls,
+    transcriptionMethod: 'auto',
+    includeSegments: false,
+  }
+}
+
+/**
+ * LinkedIn PROFILE scraper input (§19) for harvestapi/linkedin-profile-scraper. `queries` accepts full
+ * profile urls OR bare public identifiers (e.g. 'basiakubicka'). `profileScraperMode` picks the pricing
+ * tier — the cheaper details-only tier (no email lookup) is all the research/profile-rewrite use case
+ * needs. Value strings verified against the actor's live input schema.
+ */
+export function buildLinkedInProfileInput(queries: string[]): object {
+  return {
+    queries,
+    profileScraperMode: 'Profile details no email ($4 per 1k)',
+  }
+}
+
 // --- client (I/O; token from settings) ------------------------------------
 function requireToken(): string {
   const token = getKey('apify_api_token')
@@ -181,13 +240,22 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 const TERMINAL_OK = 'SUCCEEDED'
 const TERMINAL_BAD = new Set(['FAILED', 'ABORTED', 'TIMED-OUT', 'TIMED_OUT'])
+// A long run (e.g. transcription can poll for 20+ min) makes hundreds of poll requests; a single
+// transient network blip must NOT abandon — and orphan the billing of — an otherwise-healthy run.
+// Tolerate this many CONSECUTIVE poll errors (reset on any success) before giving up.
+const MAX_POLL_NET_ERRORS = 6
+const ITEMS_FETCH_ATTEMPTS = 3
 
-/** Start an actor run, poll to completion (SUCCEEDED), fetch and return dataset items. */
+/** Start an actor run, poll to completion (SUCCEEDED), fetch and return dataset items.
+ *  `opts.maxPolls` overrides the default poll ceiling for slow actors (e.g. transcription, which can
+ *  legitimately run far longer than a scrape) so we don't abandon — and pay for — an unfinished run. */
 export async function runActor(
   actorId: string,
   input: object,
-): Promise<(ApifyPost | ApifyTweet | ApifySubstackPost)[]> {
+  opts?: { maxPolls?: number },
+): Promise<(ApifyPost | ApifyTweet | ApifySubstackPost | ApifyInstagramPost | ApifyInstagramTranscript | ApifyProfile)[]> {
   const token = requireToken()
+  const maxPolls = opts?.maxPolls ?? MAX_POLLS
 
   const startRes = await fetchWithTimeout(
     `${BASE}/acts/${actorPath(actorId)}/runs?token=${token}`,
@@ -203,16 +271,29 @@ export async function runActor(
   const { id: runId, defaultDatasetId } = started.data
 
   let succeeded = false
-  for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
-    const statusRes = await fetchWithTimeout(`${BASE}/actor-runs/${runId}?token=${token}`, {}, POLL_TIMEOUT_MS)
-    if (!statusRes.ok) throw new Error(`Apify: failed to poll run ${runId} (${statusRes.status})`)
-    const { data } = (await statusRes.json()) as { data: { status: string } }
-    if (data.status === TERMINAL_OK) {
+  let consecutiveErrors = 0
+  for (let attempt = 0; attempt < maxPolls; attempt++) {
+    let status: string
+    try {
+      const statusRes = await fetchWithTimeout(`${BASE}/actor-runs/${runId}?token=${token}`, {}, POLL_TIMEOUT_MS)
+      if (!statusRes.ok) throw new Error(`Apify: failed to poll run ${runId} (${statusRes.status})`)
+      status = ((await statusRes.json()) as { data: { status: string } }).data.status
+      consecutiveErrors = 0
+    } catch (err) {
+      // Transient network/timeout blip mid-poll — retry a few times before abandoning the run.
+      if (++consecutiveErrors > MAX_POLL_NET_ERRORS) throw err
+      console.warn(
+        `Apify: transient poll error for run ${runId} (${consecutiveErrors}/${MAX_POLL_NET_ERRORS}): ${(err as Error).message}`,
+      )
+      await sleep(POLL_INTERVAL_MS)
+      continue
+    }
+    if (status === TERMINAL_OK) {
       succeeded = true
       break
     }
-    if (TERMINAL_BAD.has(data.status)) {
-      throw new Error(`Apify: run ${runId} failed with status ${data.status}`)
+    if (TERMINAL_BAD.has(status)) {
+      throw new Error(`Apify: run ${runId} failed with status ${status}`)
     }
     await sleep(POLL_INTERVAL_MS)
   }
@@ -221,15 +302,26 @@ export async function runActor(
   // dataset that would be reported as a silently-wrong success (PRD §10.7).
   if (!succeeded) {
     throw new Error(
-      `Apify: run ${runId} did not finish within ~${Math.round((MAX_POLLS * POLL_INTERVAL_MS) / 60000)} min`,
+      `Apify: run ${runId} did not finish within ~${Math.round((maxPolls * POLL_INTERVAL_MS) / 60000)} min`,
     )
   }
 
-  const itemsRes = await fetchWithTimeout(
-    `${BASE}/datasets/${defaultDatasetId}/items?token=${token}`,
-    {},
-    ITEMS_TIMEOUT_MS,
-  )
-  if (!itemsRes.ok) throw new Error(`Apify: failed to fetch dataset ${defaultDatasetId}`)
-  return (await itemsRes.json()) as (ApifyPost | ApifyTweet | ApifySubstackPost)[]
+  // Retry the final dataset fetch a few times too — a transient blip here would otherwise discard a
+  // fully-completed (and already-billed) run.
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= ITEMS_FETCH_ATTEMPTS; attempt++) {
+    try {
+      const itemsRes = await fetchWithTimeout(
+        `${BASE}/datasets/${defaultDatasetId}/items?token=${token}`,
+        {},
+        ITEMS_TIMEOUT_MS,
+      )
+      if (!itemsRes.ok) throw new Error(`Apify: failed to fetch dataset ${defaultDatasetId} (${itemsRes.status})`)
+      return (await itemsRes.json()) as (ApifyPost | ApifyTweet | ApifySubstackPost | ApifyInstagramPost | ApifyInstagramTranscript | ApifyProfile)[]
+    } catch (err) {
+      lastErr = err
+      if (attempt < ITEMS_FETCH_ATTEMPTS) await sleep(POLL_INTERVAL_MS)
+    }
+  }
+  throw lastErr
 }
