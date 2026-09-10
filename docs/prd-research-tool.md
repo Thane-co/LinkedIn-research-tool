@@ -299,6 +299,33 @@ CREATE INDEX IF NOT EXISTS posts_unembedded_idx       ON posts(embedded_at) WHER
 > **Do NOT create a vector index.** Vectors live in BLOBs; similarity is computed in JS on
 > a candidate set capped at 400 (§9). 
 
+### 6.1.1 `posts_fts` — full-text search index
+
+Keyword search runs through an **FTS5** index, not `content LIKE '%kw%'`. Substring matching was
+wrong on three counts: it matched *inside* words (`ops` hit "stops", "loops", "tops" — ~90% noise on
+a real corpus), it could not match word forms (`hire` missed "hiring"), and it produced **no
+relevance score**, so results could only be ordered by date or engagement.
+
+```sql
+CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
+  content,
+  content='posts',              -- EXTERNAL CONTENT: index only, text read back from posts
+  content_rowid='rowid',
+  tokenize='porter unicode61'   -- word boundaries + English stemming
+);
+```
+
+- **External content** (`content='posts'`) so the corpus text is not stored twice. On ~90k posts the
+  index costs ~150MB and builds in ~3s.
+- **Three triggers** (`posts_fts_insert` / `_delete` / `_update`) keep it in sync; external-content
+  tables are not auto-synced. `_update` is scoped `AFTER UPDATE OF content` so enrichment writes
+  (embedding, x_factor, transcript) don't churn the index.
+- **The tokenizer is load-bearing.** Changing it (or the indexed columns) invalidates the index:
+  bump `SCHEMA_VERSION` in `db.ts` so `migrate()` rebuilds, or searches silently go stale.
+- **Backfill:** `CREATE TABLE IF NOT EXISTS` gives an existing db an *empty* index, and an empty
+  index is indistinguishable from "nothing matched". So the one-time rebuild is gated on
+  `PRAGMA user_version` (`SCHEMA_VERSION = 1`), not on inspecting the table.
+
 ### 6.2 `creators`
 
 ```sql
@@ -311,7 +338,6 @@ CREATE TABLE IF NOT EXISTS creators (
   avatar_url    TEXT,
   persona       TEXT,                          -- §17: the PERSON this account belongs to (normalized name key).
                                                -- Accounts sharing a persona = one person across platforms.
-  tier          TEXT NOT NULL DEFAULT 'core',  -- every creator is 'core' (the scrape set); retained for that filter
   tags          TEXT NOT NULL DEFAULT '[]',    -- JSON array of strings
   market        TEXT NOT NULL DEFAULT 'ai',
   notes         TEXT,
@@ -319,15 +345,22 @@ CREATE TABLE IF NOT EXISTS creators (
   updated_at    TEXT NOT NULL,
   UNIQUE(profile_url)
 );
-CREATE INDEX IF NOT EXISTS creators_tier_idx ON creators(tier);
 CREATE INDEX IF NOT EXISTS creators_persona_idx ON creators(persona);
 ```
 
-> **One creator list (no watch/core split in v1):** every creator is part of the scrape set —
-> `tier` defaults to `'core'` and the UI never sets anything else, so the creator list *is* the set
-> a creator/both scrape pulls. The column is retained only so the scraper can filter the set; it does
-> **not** gate x-factor. X-factor is computed for **any** post whose author has ≥3 prior posts in the
-> DB within the window (§8.3).
+> **One creator list (no watch/core split):** every creator is part of the scrape set, so the creator
+> list *is* the set a creator/both scrape pulls. There is no `tier` column — it was **removed in
+> SCHEMA_VERSION 3** (2026-09-10). It had no UI and no purpose, but it was still being filtered on:
+> 7 creators had drifted to `'watch'` and were therefore silently excluded from every default creator
+> run, the user's own account among them. A dead column that quietly changes behaviour is worse than
+> no column. Membership of the scrape set is now simply "is there a row in `creators`".
+>
+> Scrape membership does **not** gate x-factor. X-factor is computed for **any** post whose author has
+> ≥3 prior posts in the DB within the window (§8.3).
+>
+> **The one subset that does exist is `track_followers` (§21.8)** — an opt-in flag for the daily
+> follower capture. It is deliberately NOT a tier: it never affects what gets scraped, only who costs
+> a daily profile call and appears on the champion leaderboard.
 
 ### 6.3 `scrape_jobs`
 
@@ -493,6 +526,29 @@ function buildEmbeddingText(content: string | null, imageDescription?: string | 
   text embedding. Writing an embedding **preserves** any existing `image_description` — it is only
   overwritten when Claude returns a new one (so descriptions survive a text-only re-embed).
 
+### 7.3 Image embeddings are uploaded, not linked
+
+`embedImage` **downloads the image and posts it as `image_base64`**. It must never hand Voyage an
+`image_url`.
+
+Voyage's server-side fetcher is blocked by LinkedIn's CDN. It answers
+`400 "The image URL you have provided is invalid"` for urls that are signed, unexpired, and return
+200 to this machine — so the url path embedded **nothing** from LinkedIn, which is ~99% of the
+corpus's images, while looking like an ordinary per-image failure.
+
+Because the fetch now runs server-side on scraped input, `embedImage` enforces: **http(s) only**
+(same policy as `safeHref`), a **content-type** that starts with `image/`, and a **size ceiling**
+(`MAX_IMAGE_BYTES`, 8MB — a LinkedIn feed image is 150-400KB, so this only rejects a video served
+under an image url).
+
+**Urls expire, so embed at scrape time.** LinkedIn images carry `?e=<unix-seconds>&v=beta&t=<sig>`.
+Once `e` passes the url is a permanent 403 and only a re-scrape can mint another. Measured on this
+corpus in Sep 2026: of 39,769 posts still awaiting an image embedding, **34,082 (86%) were already
+expired**, 5,973 carried a relative path rather than a url, and of the 4,351 absolute urls
+recoverable from `raw_data`, **zero** were still valid. A backfill months after the scrape recovers
+almost nothing — which is why `enrichPosts` runs inline right after a scrape.
+
+
 ### 7.4 Image description (OPTIONAL, can be deferred to v1.1)
 If enabled: for posts with an image, call Claude vision (`claude-sonnet-4-6`) to produce a
 1–2 sentence factual description, store in `image_description`, then (a) embed the image
@@ -617,6 +673,47 @@ MIN_GROUP_SIZE = 2                   // both image groups and content clusters
 > pure functions, fully unit-testable with small fixture vectors.
 
 ---
+
+### 9.5 Hybrid retrieval — keyword ∪ vector (search, not clustering)
+
+§9.1–9.4 use embeddings to GROUP posts already on screen. §9.5 uses them to FIND posts. Different
+job, different code path: no candidate cap, no thresholds, no groups.
+
+**Why:** FTS5 (§6.1.1) matches words. It cannot reach a post that says "recruiting is a mess" when
+you searched "hiring is broken". Embeddings can. Neither is reliably better, so both run and their
+rankings are fused.
+
+**The pipeline** (`semantic=true` + a `q`/`keywords` query):
+1. **Hard pre-filters first.** platform / authors / market / minLikes / minShares / minXFactor /
+   timeframe define the candidate pool. They shape what each retriever may return — they are not
+   applied afterwards, which would leave a narrow filter with almost nothing.
+2. **Two retrievers, same pool.** bm25 over `posts_fts`, and cosine over the vector index. Each
+   contributes at most `RETRIEVAL_CANDIDATES` (500).
+3. **Reciprocal Rank Fusion**, `score = Σ 1/(RRF_K + rank)`, `RRF_K = 60`. Position-based, so the
+   two incomparable score scales (bm25 is unbounded negative, cosine is [-1, 1]) never have to be
+   normalized or weighted, and a post both retrievers rank highly wins.
+4. **Order and page** the fused list. The fused rank is the default order; an explicit `sort`
+   re-orders the retrieved set instead.
+
+**The vector index** (`lib/db/vector-index.ts`): every stored embedding decoded ONCE into a single
+flat, row-major, unit-normalized `Float32Array`, so each comparison is a dot product. Built lazily on
+the first semantic query and cached per database connection; `resetVectorIndex()` after any
+embedding write (the enrich job calls it), or newly embedded posts stay invisible until restart.
+
+Measured on the real corpus (89,018 × 1024): **348MB** resident, **~2.7s** one-time build, **~130ms**
+per query scan. Still no vector database, still cosine in JS — consistent with the local-only rule.
+
+**Degradation is deliberate.** Semantic search is an enhancement, never a dependency: no Voyage key,
+or a failed embed call, returns the keyword results plus a `warnings` entry — never a 5xx. Losing
+recall beats losing search.
+
+**`total` changes meaning** in this mode: it is the size of the fused candidate set (≤2×500), not a
+corpus-wide count of everything that could match.
+
+**Model lock-in.** Query and documents must come from the SAME model with the SAME `input_type`
+(unset, per §7). Vectors from two models are not comparable, so a model change means re-embedding
+the whole corpus, not just the gap — see the invariant in CLAUDE.md.
+
 
 ## 10. Scraping specification
 
@@ -785,6 +882,30 @@ type PostMedia =
   | { type: 'document'; url: string; title: string | null; pages: number | null; cover: string | null }
 ```
 
+#### 10.3.2 Unavailable media degrades to a placeholder
+
+Platform CDN links are **signed and expire**: LinkedIn `media.licdn.com` uses `e=<seconds>` in
+decimal, the Instagram/Facebook CDN uses `oe=<seconds>` in **hex**. Once past, the CDN answers 403
+forever. Measured Sep 2026: **37,366** posts carry an already-expired thumbnail and **46,466**
+`media[]` entries are expired — the large majority of this corpus's images.
+
+`PostImage` (in `PostCard.tsx`) handles the two failure classes differently:
+
+- **Predictable** — `isExpiredMediaUrl` (`lib/pure/url.ts`) reads the expiry straight out of the url,
+  so a dead image renders **no `<img>` at all**. That kills both the broken-image icon and the
+  pointless round trip through `/api/media`, which would otherwise fetch upstream, take a 403, and
+  return 502 once per dead image on screen.
+- **Unpredictable** — an unsigned url that has since died, a removed local file, a dead host. Nothing
+  to read offline, so the image is attempted and the `<img onError>` swaps in the placeholder.
+
+The placeholder is **not** "render nothing". Whether a post carried an image is itself research
+signal; dropping it silently would make an image post read as text-only.
+
+A **locally cached** image (`/post-images/posts/<id>.jpg`, served from `public/`) is not signed and
+never expires — `mediaProxySrc` passes a relative path through untouched, and it renders normally.
+That local cache is the only durable copy of an image whose CDN link has lapsed.
+
+
 ### 10.4 Deduplication
 - **Level 1 (in-memory, pure, `lib/pure/dedup.ts`):** merge keyword + creator arrays into a
   Map keyed by `id`. A post present in both sources gets `scrape_source = 'both'`; otherwise
@@ -869,14 +990,16 @@ platform=linkedin|twitter|substack|all  (default all; ACCEPTS A COMMA LIST for a
                                           e.g. platform=substack,linkedin. 'all', empty, or the
                                           full set = no platform filter. Unknown tokens ignored;
                                           §17.)
-keywords=comma,separated                 (matched against content, case-insensitive LIKE)
+keywords=comma,separated                 (full-text search over content; see below)
+match=any|all                            (how keyword terms combine; default any)
+semantic=true|false                      (also retrieve by meaning and fuse; needs keywords; §9.5)
 authors=comma,separated author_ids       (include filter; EMPTY = all creators, no filter)
 minLikes=int  minShares=int              (engagement floors; default 0)
 minXFactor=float                          (x_factor >= value; null x_factor excluded)
 timeframe=all|24h|3d|week|month|3months|custom   (default all; see landing view below)
 dateFrom=ISO  dateTo=ISO                  (when timeframe=custom)
 market=string                             (posts.market bucket; §11.6, §6.5)
-sort=recent|likes|xfactor                 (default recent)
+sort=recent|likes|xfactor|relevance        (default recent; relevance needs keywords)
 groupByImage=true|false                   (default false)
 discoverTrends=true|false                 (default false)
 imageThreshold=float                       (default 0.80)
@@ -884,6 +1007,23 @@ textThreshold=float                        (default 0.65)
 page=int  pageSize=int                      (default 50, max 200)
 ```
 Behavior:
+- **Keyword search** (§6.1.1) runs through the `posts_fts` FTS5 index:
+  - Matching is by **word**, not substring, and is **stemmed** (`hire` finds hiring/hired/hires).
+  - A term containing a space is a **phrase** — `cold outbound` requires those words adjacent, in
+    order.
+  - `match=any` (default) OR's the terms, preserving the original keyword contract; `match=all`
+    AND's them. On the real corpus `cold,outbound,email` goes from 5,072 hits (OR'd) to 125 (AND'd).
+  - Terms are **quoted before they reach SQLite** (`lib/pure/fts-query.ts`), so FTS5 query syntax a
+    user typed (`AND`, `OR`, `NOT`, `NEAR`, `*`, `:`, `"`) is searched for **literally**, never
+    executed, and can never raise a syntax error at query time.
+  - A keyword with **no indexable token** (pure punctuation/emoji) matches **nothing**. It must not
+    silently drop the filter and return the whole corpus.
+  - `sort=relevance` orders by **bm25** (best match first, `posted_at` breaking ties). It needs a
+    keyword to score against; without one it falls back to `recent` rather than erroring.
+- **Semantic mode** (`semantic=true` with a query, §9.5): the keyword and vector retrievers run over
+  the same hard-filtered pool and their rankings are fused. Ordering defaults to the fused rank
+  (NOT `recent`) unless `sort` is given explicitly; `total` is the fused candidate-set size. Grouping
+  flags take precedence. A failed/absent embedder degrades to keyword-only plus a warning, never a 5xx.
 - **Paginated mode** (default): SQL `WHERE` from filters + `ORDER BY` from `sort` + `LIMIT/OFFSET`.
   Response: `{ posts, total, page, pageSize, hasMore, availableAuthors }`, where `hasMore` is exact
   (`offset + posts.length < total`). `posts` are serialized **without** the `embedding`,
@@ -943,9 +1083,15 @@ Platform detection / url normalization / `author_id` derivation happen **at the 
 See §10.6. Before starting, the route checks required keys (Apify token; Voyage key for the
 follow-on enrich). If either is missing → `412` with `{ needs: ['apify_api_token', ...] }` so the UI
 can deep-link to Settings. Otherwise it creates the job and returns **`202 { jobId }`** immediately.
-Body: `{ platforms?, mode?, keywords?, creatorIds?, timeframe?, market? }` (defaults: all platforms,
-`both`, `week`, `market` from `default_market`). `GET /api/scrape/[id]` → the live `scrape_jobs` row,
-or `404` when the id is unknown.
+Body: `{ platforms?, mode?, keywords?, creatorIds?, timeframe?, market?, includeNotes?,
+minimumFavorites? }` (defaults: all platforms, `both`, `week`, `market` from `default_market`).
+`minimumFavorites` is Twitter-keyword-only (§11.8). `GET /api/scrape/[id]` → the live `scrape_jobs`
+row, or `404` when the id is unknown.
+
+`GET /api/scrape/status` → `{ platforms: { <platform>: { lastScrapedAt, creators } } }` — every
+platform is present, `lastScrapedAt` is `MAX(posts.scraped_at)` for that platform (null when it has
+no posts) and `creators` is how many creator accounts it has. Static `status` segment takes
+precedence over the sibling `[id]` dynamic route, same as `history`.
 
 ### 11.4 `GET/PUT /api/settings` — BYO keys & actor config
 - `GET` → `{ settings, ready }`. `settings` is the full merged map with **secret values masked**
@@ -1086,7 +1232,8 @@ of the scrape set; **Bulk import** = paste many, one per line; **Remove** delete
 > **No scheduler, one creator list (N3/local rule):** there is **no cron/auto-scrape** — every scrape
 > is manual (§11.5 Manual Scrape). Creators are a **single list**; all of them are pulled on a
 > creator/both run. There is no "watch/core" split or "auto-scraped / scraped weekly" wording — it
-> would imply a schedule (and a tier) that don't exist in the UI.
+> would imply a schedule that does not exist in the UI. The vestigial `tier` column that once encoded
+> such a split was dropped in SCHEMA_VERSION 3.
 
 ## 11.6 Keywords & scrape history
 
@@ -1137,6 +1284,66 @@ Active toggles use `button[aria-pressed='true']` (blue). The post grid is
 `grid-template-columns: repeat(auto-fill, minmax(320px, 1fr))`. Focus
 styles use a `--primary` ring for accessibility. Keep it token-driven — tune via tokens, not
 scattered values.
+
+---
+
+## 11.8 Per-platform scrape control & the creator table
+
+The platforms are not alike, and bundling them into one "Run scrape now" hid that. LinkedIn is a
+curated creator set; Twitter is open keyword discovery; Instagram has no keyword mode at all; Substack
+has a Notes feed that roughly doubles a run. So each platform gets its own card and its own settings,
+and the creator list is read as one row per **person**.
+
+### Scrape cards (`app/PlatformScrapeCards.tsx`)
+One `<fieldset>` per platform, each with: the two source toggles (Creators / Keywords) with live
+counts, a timeframe, its platform-specific option, a Run button that POSTs **only that platform**, and
+its own status pill. `last scrape: <ago>` comes from `GET /api/scrape/status`.
+
+| Platform | Creators | Keywords | Extra option |
+|---|---|---|---|
+| LinkedIn | ✓ | ✓ | — |
+| X / Twitter | ✓ | ✓ | **Min likes** (`minimumFavorites`) |
+| Substack | ✓ | ✓ | **Notes** (`includeNotes`) |
+| Instagram | ✓ | **n/a** | — |
+
+`ManualScrape` survives below the cards as the escape hatch: multi-platform in one run, and the only
+place to scope a run to a single market.
+
+### Preferences (`lib/pure/scrape-prefs.ts`, Layer 0)
+All four cards' settings live in ONE settings row, `scrape_prefs`, as JSON keyed by platform.
+`parseScrapePrefs` is deliberately **tolerant** — a malformed, partial, or older row must never throw
+or leave a platform undefined; every unrecognized value falls back to its default. Two rules are
+enforced at parse time, not just in the UI: a platform in `PLATFORM_SUPPORTS_KEYWORDS` with `false`
+can never have `keywords: true`, and a `minimumFavorites` that is not a number above zero becomes
+"no floor" (the field is omitted) rather than `0`.
+
+`prefsToMode` maps the toggle pair to the existing `ScrapeMode`: both → `both`, one → `creator` /
+`keyword`, neither → `null` (the Run button is disabled; there is nothing to run).
+
+### The Twitter likes floor — keyword runs ONLY
+`minimumFavorites` becomes `min_faves` in X's own search index, so the run returns — and Apify bills
+for — only tweets that already cleared the bar. It is applied to the **keyword** input and never to
+the creator input: x-factor's baseline is the mean weighted score of an author's own prior posts, so
+filtering out a creator's weak posts would inflate every baseline and corrupt the score. A test in
+`tests/unit/jobs/scrape.test.ts` pins this.
+
+### Creator table (`lib/pure/creator-table.ts`, Layer 0)
+Creators are stored one row per account and rendered one row per person, pivoted by platform, so the
+per-platform counts are visible and every empty cell is a gap with an add button on it.
+
+- Grouping key: `persona` (§17.2) when set → else `derivePersonaKey(display_name)` → else `id:<id>`.
+  An account with neither name nor persona stays on its own row; guessing would silently merge two
+  different people.
+- A person's **label** is the first real `display_name` among their accounts, whichever platform it
+  came from; a handle or url is only a fallback when no account has a name at all.
+- A cell holds an **array**, so two accounts on the same platform for one person are both shown
+  rather than one being silently dropped.
+- Clicking an empty cell prefills the Person field with that row's key, so the new account joins the
+  existing person instead of starting a new row.
+
+`POST /api/creators/backfill-personas` fills `persona` from `display_name` for every creator that has
+none, and returns `{ updated, creators, tags }`. It only ever writes a NULL persona, so a manual
+override is never clobbered, and it skips a name that yields no key rather than guessing. Idempotent.
 
 ---
 
@@ -1549,7 +1756,7 @@ Instagram is added as a **fourth platform**, reusing the same scrape → map →
 x-factor pipeline and breaking no invariant above. It starts with the **post scraper**
 (`apify/instagram-post-scraper`), which pulls a profile's **photo, video, and carousel** posts (and
 their captions/engagement) — **creator mode only**. Speech-to-text transcript of video posts is a
-separate actor, deferred to a later increment.
+separate provider — **AssemblyAI**, see §18.1.
 
 - **`Platform`** widens to `'linkedin' | 'twitter' | 'substack' | 'instagram'`. Every enum surface
   (schema comments, the `VALID_PLATFORMS` whitelist in `/api/posts`, the `/api/scrape` default
@@ -1576,6 +1783,41 @@ separate actor, deferred to a later increment.
   `substack.com` → `instagram.com` → Twitter.
 - **x-factor, dedup, grouping, filters, persona** all work unchanged — an Instagram post is just a
   `PostRow`, and it participates in the §17 cross-platform persona timeline like any other platform.
+
+### 18.1 Video transcription — AssemblyAI, not Apify
+
+Video posts get a speech-to-text `transcript` via **AssemblyAI** (`lib/assemblyai.ts`,
+`jobs/transcribe.ts`). This replaced the Apify transcript actor
+(`crawlerbros/instagram-transcript-scraper`); the retired `app/IgCompare.tsx` tab existed to measure
+the two side by side, and AssemblyAI won on cost and on latency (per-clip results instead of one
+batched actor run that returns nothing until it finishes).
+
+- **Key:** `assemblyai_api_key`, BYO in Settings, masked like every other secret. It is the ONLY gate
+  now — `POST /api/transcribe` 412s with `{ needs: ['assemblyai_api_key'] }`, and no longer requires
+  an Apify token, because transcription runs no actor.
+- **Input is the post's own stored `media.url`** (the direct `videoUrl` from the Instagram scrape).
+  AssemblyAI downloads the audio itself; we never proxy the bytes.
+- **Serial, bounded.** One clip at a time, `limit` per batch (25 from the scrape follow-on). A reel is
+  seconds of audio, so a queue would be over-engineering. One clip failing never aborts the batch.
+
+**The load-bearing constraint: Instagram CDN urls are signed and expire within days.** So the three
+transcript states are not the same thing and must not be collapsed:
+
+| Outcome | Stored `transcript` | Why |
+|---|---|---|
+| Speech found | the text | done |
+| Transcribed, no speech (music-only reel) | `''` | leaves the queue, never re-attempted |
+| **Media url expired** (`AudioUnavailableError`) | **`NULL`** | needs a **re-scrape**, not a retry |
+
+Writing `''` on an expired url would silently drop the post from
+`getVideoPostsMissingTranscript()` forever. The job counts these separately and returns
+`{ transcribed, remaining, unavailable }`, logging what to do about them.
+
+This is why `transcribeInstagramVideos` runs as a **follow-on inside `runScrape`**, immediately after
+the Instagram scrape, while the urls are still live. The `/api/transcribe` route remains for draining
+a batch, but it can only transcribe posts whose urls have not yet expired.
+
+---
 
 ## 19. LinkedIn profile scraper (profile details + follower count)
 
@@ -1668,7 +1910,7 @@ All GET, all under `/api/v1`, all token-gated, all `force-dynamic`.
 | `/api/v1/posts` | `runPostsQuery()` — the §11.1 filter set, paginated, or `imageGroups` / `contentClusters` under `groupByImage` / `discoverTrends` (§9). Plus `q` as an alias for `keywords`. |
 | `/api/v1/posts/{id}` | One serialized post (404 when absent). |
 | `/api/v1/authors` | `getAvailableAuthors(filters)` — the `author_id` values to filter by. |
-| `/api/v1/creators` | `listCreators({tier,tag,platform})`. |
+| `/api/v1/creators` | `listCreators({tag,platform})`. The `tier` filter was removed with the column (SCHEMA_VERSION 3). |
 | `/api/v1/keywords` | `listKeywords()` grouped by market. |
 | `/api/v1/profiles` | `listProfiles()` minus `raw_data`. |
 
@@ -1724,3 +1966,161 @@ production build", so simply opening the dashboard silently broke the agent serv
 directories let the dashboard and the read-only agent server run simultaneously without clobbering
 each other. `start:agent` / `start:snapshot` also build first, so a stale agent build can't be
 served after a code change.
+
+---
+
+## 21. Daily follower tracking & the champion leaderboard
+
+A **time series** of every core LinkedIn creator's follower count, captured once a day, turned into
+two ranked boards (most followers gained, fastest % growth) and a per-creator day-by-day view that
+ties a day's growth to the post published that day.
+
+`profiles` (§6.6) already stores a follower count, but `upsertProfile` OVERWRITES it on every
+re-scrape — it answers "how many followers now?" and can never answer "how many yesterday?". §21
+adds the history alongside it; §6.6 is untouched.
+
+**LinkedIn only in v1.** Twitter post payloads already carry `author.followers` for free and are the
+obvious next platform, but no capture path is built for them yet. Instagram and Substack expose no
+follower count in their post payloads at all.
+
+### 21.1 Invariants
+- **The gap is measured from `captured_at`, never from the day key.** A 06:00 capture followed by an
+  18:00 one covers 1.5 days of real growth; differencing the `YYYY-MM-DD` strings would call that one
+  day and report a 50% overstated daily rate.
+- **A missing delta is `null`, never `0`.** A creator captured once has not "grown by zero" — the
+  number does not exist. Collapsing the two puts brand-new creators in a dead heat with genuinely
+  flat ones. The UI renders an em dash and sorts them last, below even the worst loser.
+- **A follower count of 0 is never stored.** It means the scrape returned nothing, not an account
+  with no followers. Storing it would invent a crash on the capture day and a matching spike on the
+  next one.
+- **The percent floor applies to the PERCENT board only** (`FOLLOWER_PERCENT_FLOOR = 10_000`). Rate
+  ranking without a size floor is owned every day by whichever small account gained forty people on
+  noise. Every creator still ranks on absolute gain, and the board states the floor on screen so an
+  absent creator reads as "too small to rank by rate", not as a bug.
+- **A day's growth is never split between posts.** One post that day owns the number; several share
+  it and get no per-post figure; zero posts still show the growth (an older post catching fire, or an
+  off-platform mention). A fabricated split is indistinguishable from a measurement.
+- **A baseline materially older than the window is flagged `approx`,** not silently presented as that
+  window's gain. Sized at `windowDays * 1.5`. This is the normal state of a freshly seeded series,
+  where a 1d board's only baseline may be weeks old.
+- **`(author_id, platform, captured_on)` is the primary key,** so a second capture in a day refreshes
+  it rather than appending a duplicate that would read as a zero-gain day. This is what makes the
+  daily job safe to re-run after a partial failure.
+
+### 21.2 Schema — `follower_snapshots` (§6.7)
+`author_id` (clean slug, matches `creators.author_id` / `posts.author_id`), `platform`, `captured_on`
+(`YYYY-MM-DD` UTC), `captured_at` (ISO instant), `followers` INTEGER NOT NULL, `connections`,
+`source` (`'profile-actor'` | `'post-author'` | `'seed'`). PK `(author_id, platform, captured_on)`;
+index on `(platform, captured_on DESC)`.
+
+**SCHEMA_VERSION 2** seeds the first data point of each series from `profiles` (`followers > 0`,
+`ON CONFLICT DO NOTHING` — a real capture always outranks a seed), so the board has a baseline
+immediately rather than after 24h.
+
+### 21.3 Pure layer — `lib/pure/follower-growth.ts` (100% coverage)
+- `dailyDeltas(snapshots)` → one delta per consecutive pair, oldest first, with `gap_days` and
+  `per_day` normalized off the real instants. Negative deltas are kept: unfollows are signal.
+- `windowGrowth(snapshots, { windowDays, asOf })` → the newest snapshot against the newest one at or
+  before the window start, falling back to the nearest older snapshot and reporting the TRUE
+  `gap_days` plus `approx`. `null` when fewer than two snapshots exist, or when the window is too
+  short to contain a second measurement.
+- `rankLeaderboard(entries, { percentFloor })` → `{ absolute, percent }`, 1-based ranks per board,
+  ties broken by follower count then `author_id` so the board never reshuffles between loads.
+- `attributeDay(gained, postsThatDay)` → `{ gained, post_count, shared, attributable_post_id }`.
+
+### 21.4 Job — `jobs/snapshot-followers.ts`
+Reuses the §19 profile-detail actor. The actor's `queries` field takes an ARRAY, so the roster goes
+out in batches of 50 (67 creators = 2 runs, ~$0.27 at $4/1k) rather than one run per creator. Each
+returned item also refreshes `profiles` — the actor already paid for the full detail. A failed batch
+is logged and skipped, never fatal. Returns `{ captured_on, requested, captured, skipped, missing,
+errors }`; `missing` makes a silent roster gap visible.
+
+### 21.5 API
+- `GET /api/followers?window=1|7|30&asOf=YYYY-MM-DD` → the full `Leaderboard`. An unsupported window
+  or a malformed `asOf` is a 400, never a silent fallback to today.
+- `GET /api/followers/[authorId]?days=N&asOf=…` → one creator's series + per-day attribution. An
+  unknown creator is an empty series with a 200, not a 404.
+- `POST /api/followers/snapshot` → runs a capture. CSRF-guarded, 412s on a missing Apify token, 502s
+  on a hard misconfiguration (a failed batch is reported INSIDE a 200 result).
+- One implementation, `lib/followers-query.ts`, exactly as `runPostsQuery()` is shared in §20.
+
+### 21.6 UI
+A third nav route, **Growth**. Header carries `as_of`, capture coverage (`66 of 67 creators`), a
+1d/7d/30d toggle and a **Capture today** button. Two boards side by side, stacking under 420px:
+*Most followers gained* (every creator, scrolling in place) and *Fastest % growth* (10,000+ only,
+floor stated in the caption). Each row: rank, name, followers, signed delta, sparkline, posts in
+window, best x-factor. Clicking a name opens the day-by-day panel with the post that owns each day.
+
+### 21.7 Scheduling
+The schedule lives in **launchd, never in the app** — the "no cron, no scheduler inside the app" rule
+stands. `scripts/snapshot-followers.mjs` drives the real route (starting a local server first if none
+is listening) rather than reimplementing the capture in plain JS, which would fork the logic and let
+it drift. See `docs/follower-tracking.md`.
+
+---
+
+## 22. Post engagement growth (the rolling re-scrape)
+
+§21 answers "is this creator growing?". This answers "how did **this post** grow after it was
+published?" — whether engagement compounded past day one or spiked and died.
+
+`posts` holds a post's LATEST engagement and `refreshEngagement()` overwrites it in place, so the
+existing schema can say how a post is doing but never how it got there. §22 adds the curve.
+
+### 22.1 Invariants
+- **Day slots are measured from `posted_at`, not from the capture date.** Comparing two posts at
+  "day 2" only means something if day 2 is two days after each was published. A post published at
+  09:00 and one at 23:00 the same evening share a capture date while being a day apart in maturity.
+- **A missing measurement is `null`, never `0`.** A post captured once has no curve; a post too young
+  to have a day 3 renders an em dash. Zero would read as "flat", which is a different claim.
+- **Negative deltas are preserved.** LinkedIn revises reaction counts downward (deleted accounts,
+  removed reactions). Clamping to 0 would draw a flat line where the data moved.
+- **PK `(post_id, captured_on)`** — a second run in a day refreshes rather than appending a phantom
+  zero-gain step, which is what makes a retry safe.
+- **A post returned but not stored is INSERTED, not discarded.** We already paid for the item;
+  dropping it would leave a hole the search can never fill. The first real run found **58** such posts.
+
+### 22.2 Cost — the reason this job is different
+The actor bills **per result item** ($0.002/post, FREE/BRONZE; $0.00175 SILVER; $0.0015 GOLD+), so a
+rolling window pays again for every post it re-reads. That is inherent — a curve cannot be measured
+without re-measuring — which makes the WINDOW the only cost lever. `refreshRecentEngagement` returns
+`cost_usd` so a run is never a surprise on the invoice.
+
+The actor's `postedLimit` enum offers `any|1h|24h|week|month|3months|6months|year` — **no 2- or 3-day
+option**. So the rolling window is `week` (`ENGAGEMENT_REFRESH_TIMEFRAME`) and the day-N comparison is
+done over `post_snapshots`, not by asking the actor for a narrower window.
+
+Measured on the first real run: 55 creators → **538 posts, $1.08, 53s** ≈ **$32/month**.
+
+### 22.3 Schema — `post_snapshots` (§6.8)
+`post_id`, `captured_on` (`YYYY-MM-DD` UTC), `captured_at` (ISO instant), `likes`, `comments`,
+`shares`. PK `(post_id, captured_on)`; index on `captured_on DESC`. **No FK to `posts`** — the
+snapshot pipeline must never be able to block a post insert, and an orphan row simply never joins.
+
+### 22.4 Pure layer — `lib/pure/post-growth.ts` (100% coverage)
+- `engagementDeltas(snapshots)` → per-step `gained`, `weighted_gained` (the §8 1/3/5 weighting), and
+  `pct_of_total`.
+- `summarizePostGrowth(postedAt, snapshots)` → `day1`/`day2`/`day3` filled from the capture NEAREST
+  each age (half-day tolerance, so a drifting capture hour still fills its slot but a two-day gap
+  never masquerades as the missing day), plus `still_climbing` and `pct_after_day1`.
+- `ageInDays(from, to)` → elapsed days to one decimal, clamped at 0.
+
+`pct_after_day1` is the signal worth reading: two posts can finish on the same total, one having
+taken it all in an afternoon and the other compounding for three days. Only the second is a
+repeatable format.
+
+### 22.5 Job / API / UI
+- `jobs/refresh-engagement.ts` `refreshRecentEngagement()` — batches of 25 creators, one actor run
+  each; updates `posts` in place AND appends to `post_snapshots`; a failed batch is logged and
+  skipped, never fatal.
+- `GET /api/post-growth?days=&asOf=&authorId=` — the recent list, or one creator plus their own
+  **median day-1** yardstick. `POST /api/post-growth/refresh` — CSRF-guarded, token-gated, returns
+  the run cost.
+- `lib/post-growth-query.ts` is the single implementation, as `runPostsQuery()` is for §20.
+- `PostGrowthBoard` sits under the champion leaderboard in the Growth tab: day 1 / day 2 / day 3 /
+  now / +today / % late, sorted by what moved most in the latest step.
+
+### 22.6 Scheduling
+Same rule as §21: the schedule lives in **launchd, never in the app**.
+`scripts/refresh-engagement.mjs` drives the real route rather than reimplementing the job.
+See `docs/post-growth-tracking.md`.

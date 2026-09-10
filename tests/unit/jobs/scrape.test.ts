@@ -80,7 +80,6 @@ describe('runScrape', () => {
       platform: 'linkedin',
       profile_url: 'https://www.linkedin.com/in/jane',
       author_id: 'jane',
-      tier: 'core',
     })
     mockRunActor.mockImplementation(async (_actorId, input: object) => {
       if ('searchQueries' in input) return [liItem('100'), liItem('200')]
@@ -118,7 +117,6 @@ describe('runScrape', () => {
       platform: 'substack',
       profile_url: 'https://laraacosta.substack.com',
       author_id: 'laraacosta',
-      tier: 'core',
     })
     let creatorInput: Record<string, unknown> | null = null
     mockRunActor.mockImplementation(async (_actorId, input: object) => {
@@ -153,7 +151,6 @@ describe('runScrape', () => {
       platform: 'instagram',
       profile_url: 'https://www.instagram.com/natgeo/',
       author_id: 'natgeo',
-      tier: 'core',
     })
     let creatorInput: Record<string, unknown> | null = null
     mockRunActor.mockImplementation(async (_actorId, input: object) => {
@@ -176,7 +173,7 @@ describe('runScrape', () => {
   })
 
   it('does NOT run Instagram in keyword-only mode (the post scraper is profile-driven) (§18)', async () => {
-    upsertCreator({ platform: 'instagram', profile_url: 'https://www.instagram.com/natgeo/', author_id: 'natgeo', tier: 'core' })
+    upsertCreator({ platform: 'instagram', profile_url: 'https://www.instagram.com/natgeo/', author_id: 'natgeo' })
     mockRunActor.mockResolvedValue([])
     await runScrape({ platforms: ['instagram'], mode: 'keyword', keywords: ['ai'], timeframe: 'week', market: 'ai' })
     expect(mockRunActor).not.toHaveBeenCalled() // no keyword actor for Instagram → nothing to run
@@ -187,7 +184,6 @@ describe('runScrape', () => {
       platform: 'substack',
       profile_url: 'https://laraacosta.substack.com',
       author_id: 'laraacosta',
-      tier: 'core',
     })
     mockRunActor.mockImplementation(async (_actorId, input: object) => {
       if ('publicationHandles' in input) {
@@ -210,7 +206,7 @@ describe('runScrape', () => {
   })
 
   it('backfills an empty post-share note from the reader API, dropping only the un-backfillable (§17)', async () => {
-    upsertCreator({ platform: 'substack', profile_url: 'https://laraacosta.substack.com', author_id: 'laraacosta', tier: 'core' })
+    upsertCreator({ platform: 'substack', profile_url: 'https://laraacosta.substack.com', author_id: 'laraacosta' })
     mockRunActor.mockImplementation(async (_a, input: object) => {
       if ('publicationHandles' in input) {
         return [
@@ -236,8 +232,8 @@ describe('runScrape', () => {
   })
 
   it('runs LinkedIn + Substack together when both platforms are requested', async () => {
-    upsertCreator({ platform: 'linkedin', profile_url: 'https://www.linkedin.com/in/jane', author_id: 'jane', tier: 'core' })
-    upsertCreator({ platform: 'substack', profile_url: 'https://laraacosta.substack.com', author_id: 'laraacosta', tier: 'core' })
+    upsertCreator({ platform: 'linkedin', profile_url: 'https://www.linkedin.com/in/jane', author_id: 'jane' })
+    upsertCreator({ platform: 'substack', profile_url: 'https://laraacosta.substack.com', author_id: 'laraacosta' })
     mockRunActor.mockImplementation(async (_a, input: object) => {
       if ('targetUrls' in input) return [liItem('100')]
       if ('publicationHandles' in input) return [substackItem('1')]
@@ -261,7 +257,6 @@ describe('runScrape', () => {
       platform: 'linkedin',
       profile_url: 'https://www.linkedin.com/in/jane',
       author_id: 'jane',
-      tier: 'core',
     })
     mockRunActor.mockImplementation(async (_a, input: object) => {
       if ('searchQueries' in input) return [liItem('100')]
@@ -379,5 +374,41 @@ describe('recomputeXFactors', () => {
 
   it('dedupes the author list and is a no-op for an unknown author (non-fatal)', () => {
     expect(() => recomputeXFactors(['ghost', 'ghost', ''])).not.toThrow()
+  })
+})
+
+describe('runScrape — Twitter likes floor (PRD §11.8)', () => {
+  it('passes minimumFavorites through to the keyword input', async () => {
+    mockRunActor.mockResolvedValue([])
+    await runScrape({
+      platforms: ['twitter'],
+      mode: 'keyword',
+      keywords: ['ai agents'],
+      timeframe: 'week',
+      market: 'ai',
+      minimumFavorites: 250,
+    })
+    expect(mockRunActor.mock.calls[0]![1]).toMatchObject({ searchTerms: ['ai agents'], minimumFavorites: 250 })
+  })
+
+  it('omits the floor entirely when none is set', async () => {
+    mockRunActor.mockResolvedValue([])
+    await runScrape({ platforms: ['twitter'], mode: 'keyword', keywords: ['ai'], timeframe: 'week', market: 'ai' })
+    expect('minimumFavorites' in (mockRunActor.mock.calls[0]![1] as object)).toBe(false)
+  })
+
+  it('never applies the floor to a CREATOR run — x-factor needs a creator’s weak posts too', async () => {
+    upsertCreator({ platform: 'twitter', profile_url: 'https://x.com/jane', author_id: 'jane' })
+    mockRunActor.mockResolvedValue([])
+    await runScrape({
+      platforms: ['twitter'],
+      mode: 'creator',
+      timeframe: 'week',
+      market: 'ai',
+      minimumFavorites: 250,
+    })
+    const input = mockRunActor.mock.calls[0]![1] as object
+    expect('twitterHandles' in input).toBe(true)
+    expect('minimumFavorites' in input).toBe(false)
   })
 })

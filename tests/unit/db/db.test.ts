@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
-import { getDb, migrate, resetDb } from '@/lib/db/db'
+import { getDb, migrate, resetDb, SCHEMA_VERSION } from '@/lib/db/db'
 import { SETTINGS_DEFAULTS } from '@/lib/config'
 
 afterEach(() => resetDb())
@@ -10,16 +10,35 @@ const tableNames = (db: Database.Database): string[] =>
     .map((r) => r.name)
     .sort()
 
+// The six real tables, excluding FTS5's virtual table and its `posts_fts_*` shadow tables.
+const contentTableNames = (db: Database.Database): string[] =>
+  tableNames(db).filter((n) => !n.startsWith('posts_fts'))
+
 const indexNames = (db: Database.Database): string[] =>
   (db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'").all() as {
     name: string
   }[]).map((r) => r.name)
 
 describe('migrate', () => {
-  it('creates all six tables', () => {
+  it('creates all eight content tables', () => {
     const db = new Database(':memory:')
     migrate(db)
-    expect(tableNames(db)).toEqual(['creators', 'keywords', 'posts', 'profiles', 'scrape_jobs', 'settings'])
+    expect(contentTableNames(db)).toEqual([
+      'creators', 'follower_snapshots', 'keywords', 'post_snapshots', 'posts', 'profiles',
+      'scrape_jobs', 'settings',
+    ])
+  })
+
+  it('creates the posts_fts search index and its sync triggers (§11.1)', () => {
+    const db = new Database(':memory:')
+    migrate(db)
+    expect(tableNames(db)).toContain('posts_fts')
+    const triggers = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type='trigger'").all() as { name: string }[]
+    ).map((r) => r.name)
+    expect(triggers).toEqual(
+      expect.arrayContaining(['posts_fts_insert', 'posts_fts_delete', 'posts_fts_update']),
+    )
   })
 
   it('creates the load-bearing indexes (including the unique url index)', () => {
@@ -45,7 +64,28 @@ describe('migrate', () => {
     const db = new Database(':memory:')
     migrate(db)
     expect(() => migrate(db)).not.toThrow()
-    expect(tableNames(db)).toEqual(['creators', 'keywords', 'posts', 'profiles', 'scrape_jobs', 'settings'])
+    expect(contentTableNames(db)).toEqual([
+      'creators', 'follower_snapshots', 'keywords', 'post_snapshots', 'posts', 'profiles',
+      'scrape_jobs', 'settings',
+    ])
+  })
+
+  it('seeds the follower series from profiles already scraped (§21), once, without clobbering a real capture', () => {
+    const db = new Database(':memory:')
+    migrate(db)
+    db.prepare(
+      "INSERT INTO profiles (id, followers, connections, scraped_at) VALUES ('jane', 12000, 500, '2026-08-01T09:30:00.000Z')",
+    ).run()
+    db.prepare(
+      "INSERT INTO profiles (id, followers, connections, scraped_at) VALUES ('ghost', 0, 0, '2026-08-01T09:30:00.000Z')",
+    ).run()
+
+    // Re-run the versioned migration as it would run on the next open of an older db.
+    db.pragma('user_version = 1')
+    migrate(db)
+
+    const rows = db.prepare('SELECT author_id, followers, source FROM follower_snapshots').all()
+    expect(rows).toEqual([{ author_id: 'jane', followers: 12000, source: 'seed' }])
   })
 
   it('seeds the non-secret settings defaults', () => {
@@ -79,7 +119,7 @@ describe('migrate', () => {
     const db = new Database(':memory:')
     db.exec(`CREATE TABLE creators (
       id TEXT PRIMARY KEY, platform TEXT NOT NULL, profile_url TEXT NOT NULL, author_id TEXT,
-      display_name TEXT, avatar_url TEXT, tier TEXT NOT NULL DEFAULT 'core',
+      display_name TEXT, avatar_url TEXT,
       tags TEXT NOT NULL DEFAULT '[]', market TEXT NOT NULL DEFAULT 'ai', notes TEXT,
       added_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(profile_url)
     )`)
@@ -95,6 +135,46 @@ describe('migrate', () => {
     // the pre-existing row survives with a null persona
     expect(db.prepare("SELECT persona FROM creators WHERE id='c1'").get()).toEqual({ persona: null })
     expect(() => migrate(db)).not.toThrow() // still idempotent
+  })
+})
+
+describe('migrate — posts_fts backfill (schema version 1)', () => {
+  /** A db holding posts but no search index: what every pre-FTS database looks like on first open. */
+  const legacyDbWithPosts = (): Database.Database => {
+    const db = new Database(':memory:')
+    migrate(db) // real schema, so the columns match
+    db.prepare("INSERT INTO posts (id, platform, content, scraped_at) VALUES (?, 'linkedin', ?, 't')").run(
+      'a',
+      'ai agents everywhere',
+    )
+    // Wipe the index and the version stamp to simulate a db created before posts_fts existed.
+    db.exec("INSERT INTO posts_fts(posts_fts) VALUES('delete-all')")
+    db.pragma('user_version = 0')
+    return db
+  }
+
+  it('backfills the index for posts that were inserted before it existed', () => {
+    const db = legacyDbWithPosts()
+    const matches = (): number =>
+      (db.prepare("SELECT COUNT(*) AS n FROM posts_fts WHERE posts_fts MATCH 'agents'").get() as { n: number }).n
+    expect(matches()).toBe(0) // precondition: the index really is empty
+
+    migrate(db)
+    expect(matches()).toBe(1)
+  })
+
+  it('stamps the schema version so the rebuild runs once, not on every open', () => {
+    const db = legacyDbWithPosts()
+    migrate(db)
+    expect(db.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION)
+
+    // A second migrate must NOT rebuild: prove it by emptying the index and re-running.
+    db.exec("INSERT INTO posts_fts(posts_fts) VALUES('delete-all')")
+    migrate(db)
+    const n = (db.prepare("SELECT COUNT(*) AS n FROM posts_fts WHERE posts_fts MATCH 'agents'").get() as {
+      n: number
+    }).n
+    expect(n).toBe(0)
   })
 })
 

@@ -5,10 +5,13 @@ export type Platform = 'linkedin' | 'twitter' | 'substack' | 'instagram'
 export type ScrapeSource = 'keyword' | 'creator' | 'both'
 export type ScrapeMode = 'keyword' | 'creator' | 'both'
 export type JobStatus = 'running' | 'succeeded' | 'failed'
-export type CreatorTier = 'core' | 'watch'
 export type AuthorType = 'profile' | 'company' | 'verified'
 export type Timeframe = 'all' | '24h' | '3d' | 'week' | 'month' | '3months' | 'custom'
-export type SortMode = 'recent' | 'likes' | 'xfactor'
+// 'relevance' = FTS5 bm25 over the keyword MATCH; it needs keywords, and falls back to 'recent'
+// without them (§11.1).
+export type SortMode = 'recent' | 'likes' | 'xfactor' | 'relevance'
+// How multiple keyword terms combine: 'any' OR's them (default), 'all' AND's them (§11.1).
+export type MatchMode = 'any' | 'all'
 
 // --- posts row (PRD §6.1) --------------------------------------------------
 // Vectors are stored as Float32 BLOBs in SQLite; in TS we carry them as Buffer at the
@@ -58,7 +61,9 @@ export interface CreatorRow {
   // §17: the PERSON this account belongs to (normalized name key). Accounts sharing a persona are the
   // same person across platforms. Auto-derived from display_name, manually overridable.
   persona: string | null
-  tier: CreatorTier
+  // §21.8: 1 = include in the daily follower capture + champion leaderboard. Independent of the
+  // scrape roster; a creator can be researched without being tracked.
+  track_followers: number
   tags: string // JSON array of strings
   market: string
   notes: string | null
@@ -189,16 +194,6 @@ export interface ApifyInstagramPost {
   displayUrl?: string | null // primary thumbnail / video poster
   videoUrl?: string | null
   images?: string[] // carousel image urls (Sidecar); often empty for a single-image post
-  [key: string]: unknown
-}
-
-// Instagram transcript record (crawlerbros/instagram-transcript-scraper output, §18). One item per
-// transcribed video; `fullText` is the transcript, `shortCode`/`postUrl` match it back to a post.
-export interface ApifyInstagramTranscript {
-  fullText?: string | null
-  shortCode?: string
-  postUrl?: string
-  transcriptionMethod?: string // 'native' | 'whisper'
   [key: string]: unknown
 }
 

@@ -22,7 +22,12 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "build:agent": "NEXT_DIST_DIR=.next-agent next build",
-    "stop:agent": "pkill -f 'next-server|next start' || true"
+    "stop:agent": "pkill -f 'next-server|next start' || true",
+    "followers:snapshot": "node scripts/snapshot-followers.mjs",
+    "creators:prune": "node scripts/prune-creators.mjs",
+    "scan:viral": "tsx scripts/scrape-viral-window.ts",
+    "post-loop:daily": "tsx scripts/daily-post-performance.ts",
+    "posts:refresh": "node scripts/refresh-engagement.mjs"
   },
   "dependencies": {
     "apify-client": "^2.9.3",
@@ -45,6 +50,7 @@
     "eslint-config-next": "^14.2.5",
     "jsdom": "^24.1.3",
     "msw": "^2.3.4",
+    "tsx": "^4.23.13",
     "typescript": "^5.5.3",
     "vitest": "^2.0.5"
   }

@@ -14,6 +14,12 @@
 *.db-wal
 *.db-shm
 research.db
+# ...including pre-migration backups: `*.db` does not match a `.bak` suffix, and research.db.pre-fts.bak
+# is 669MB — well past GitHub's 100MB file limit, so committing it does not just leak data, it breaks
+# the push.
+*.db.bak
+*.db.*.bak
+research.db.pre-fts.bak
 
 # env — only DB_PATH lives here, but never commit it
 .env

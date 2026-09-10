@@ -5,14 +5,14 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { DashboardClient } from '@/app/DashboardClient'
-import { IgCompare } from '@/app/IgCompare'
+import { GrowthBoard } from '@/app/GrowthBoard'
 import { ScrapeSettings } from '@/app/ScrapeSettings'
 import type { SettingsView } from '@/app/SettingsPanel'
 import { apiFetch } from '@/lib/api-client'
 
 export default function Page() {
   const [view, setView] = useState<SettingsView | null>(null)
-  const [route, setRoute] = useState<'search' | 'settings' | 'ig-compare'>('settings')
+  const [route, setRoute] = useState<'search' | 'growth' | 'settings'>('settings')
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(() => {
@@ -54,17 +54,17 @@ export default function Page() {
         <button type="button" aria-pressed={route === 'search'} disabled={!ready} onClick={() => setRoute('search')}>
           Search
         </button>
+        <button type="button" aria-pressed={route === 'growth'} disabled={!ready} onClick={() => setRoute('growth')}>
+          Growth
+        </button>
         <button type="button" aria-pressed={route === 'settings'} onClick={() => setRoute('settings')}>
           Settings
-        </button>
-        <button type="button" aria-pressed={route === 'ig-compare'} onClick={() => setRoute('ig-compare')}>
-          IG Compare (temp)
         </button>
       </nav>
 
       {route === 'search' && <DashboardClient />}
+      {route === 'growth' && <GrowthBoard />}
       {route === 'settings' && <ScrapeSettings view={view} onSaved={setView} />}
-      {route === 'ig-compare' && <IgCompare ready={{ apify: view.ready.apify, assemblyai: view.ready.assemblyai }} />}
     </main>
   )
 }

@@ -54,6 +54,39 @@ CREATE INDEX IF NOT EXISTS posts_platform_idx         ON posts(platform);
 CREATE UNIQUE INDEX IF NOT EXISTS posts_url_unique_idx ON posts(url) WHERE url IS NOT NULL;
 CREATE INDEX IF NOT EXISTS posts_unembedded_idx       ON posts(embedded_at) WHERE embedding IS NULL;
 
+-- 6.1.1 posts_fts — full-text search index over post content (PRD §11.1) -----
+-- An EXTERNAL-CONTENT FTS5 table: it stores only the inverted index (word -> post) and reads the
+-- text itself back from `posts`, so the 80MB of post content is not duplicated on disk.
+--
+-- Why this exists: `content LIKE '%kw%'` is substring matching, not search. It matches 'ops' inside
+-- "stops"/"loops"/"tops", it cannot match 'hire' against "hiring", and it produces no relevance
+-- score, so results can only be ordered by date or engagement. FTS5 fixes all three.
+--
+-- INVARIANT — the tokenizer is load-bearing: 'porter unicode61' gives word-boundary matching plus
+-- English stemming (hire/hiring/hired/hires collapse to one token). CHANGING IT INVALIDATES THE
+-- INDEX: bump SCHEMA_VERSION in db.ts so migrate() rebuilds, or searches silently go stale.
+CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
+  content,
+  content='posts',
+  content_rowid='rowid',
+  tokenize='porter unicode61'
+);
+
+-- External-content tables are NOT auto-synced; these triggers are the contract. The 'delete' command
+-- needs the OLD text to know which tokens to remove, which is why old.content is passed back in.
+-- The update trigger is scoped to `OF content` so the enrich/x-factor writes (which touch embedding,
+-- x_factor, transcript) don't churn the index on every pass.
+CREATE TRIGGER IF NOT EXISTS posts_fts_insert AFTER INSERT ON posts BEGIN
+  INSERT INTO posts_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS posts_fts_delete AFTER DELETE ON posts BEGIN
+  INSERT INTO posts_fts(posts_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS posts_fts_update AFTER UPDATE OF content ON posts BEGIN
+  INSERT INTO posts_fts(posts_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+  INSERT INTO posts_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+
 -- 6.2 creators --------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS creators (
   id            TEXT PRIMARY KEY,              -- crypto.randomUUID()
@@ -63,15 +96,18 @@ CREATE TABLE IF NOT EXISTS creators (
   display_name  TEXT,
   avatar_url    TEXT,
   persona       TEXT,                          -- §17: the PERSON this account belongs to (normalized name key)
-  tier          TEXT NOT NULL DEFAULT 'core',  -- every creator is 'core' (the scrape set); retained for that filter
   tags          TEXT NOT NULL DEFAULT '[]',    -- JSON array of strings
   market        TEXT NOT NULL DEFAULT 'ai',
   notes         TEXT,
+  -- §21.8: opt-in to the daily follower capture. TWO LISTS, ONE ROSTER — every creator here is
+  -- scraped for content research; only the flagged subset costs a daily profile call and appears on
+  -- the champion leaderboard. Defaults to 0 so adding a creator for research never silently adds a
+  -- recurring cost.
+  track_followers INTEGER NOT NULL DEFAULT 0,
   added_at      TEXT NOT NULL,
   updated_at    TEXT NOT NULL,
   UNIQUE(profile_url)
 );
-CREATE INDEX IF NOT EXISTS creators_tier_idx ON creators(tier);
 -- NOTE: creators_persona_idx is created in db.ts AFTER the additive-column migration (persona may be
 -- absent on a legacy db when this file runs, which would make an index-on-persona here fail).
 
@@ -134,3 +170,55 @@ CREATE TABLE IF NOT EXISTS profiles (
   raw_data    TEXT                         -- JSON.stringify of the full Apify item
 );
 CREATE INDEX IF NOT EXISTS profiles_scraped_idx ON profiles(scraped_at DESC);
+
+-- 6.7 follower_snapshots — daily follower time series per creator (§21) -----
+-- `profiles` (§6.6) holds the LATEST full detail for a profile and is overwritten on every
+-- re-scrape, so it can answer "how many followers now?" but never "how many yesterday?". This table
+-- is the history: append-only, one row per creator per UTC day.
+--
+-- INVARIANT — the primary key is (author_id, platform, captured_on), so a second capture on the same
+-- day REPLACES the first rather than duplicating it. That is what makes a re-run of the daily job
+-- safe, and what stops a double run from injecting a phantom zero-gain day into the series.
+--
+-- INVARIANT — `captured_at` is the real instant and is NOT redundant with `captured_on`. Growth rate
+-- is computed from the instants: a 06:00 capture followed by an 18:00 one covers 1.5 days, and
+-- differencing the day keys would report that 50% overstated as a daily rate.
+--
+-- `followers` is never NULL: a profile that returned no count is not recorded at all, because a
+-- stored 0 is indistinguishable from an account with zero followers and poisons the delta.
+CREATE TABLE IF NOT EXISTS follower_snapshots (
+  author_id   TEXT NOT NULL,               -- clean slug/handle — matches creators.author_id, posts.author_id
+  platform    TEXT NOT NULL,               -- 'linkedin' | 'twitter' | ...
+  captured_on TEXT NOT NULL,               -- 'YYYY-MM-DD' UTC day key
+  captured_at TEXT NOT NULL,               -- ISO-8601 UTC instant of the capture
+  followers   INTEGER NOT NULL,
+  connections INTEGER,                     -- LinkedIn only; NULL elsewhere
+  source      TEXT NOT NULL,               -- 'profile-actor' | 'post-author' | 'seed'
+  PRIMARY KEY (author_id, platform, captured_on)
+);
+CREATE INDEX IF NOT EXISTS follower_snapshots_day_idx ON follower_snapshots(platform, captured_on DESC);
+
+-- 6.8 post_snapshots — daily engagement time series per post (§22) ----------
+-- `posts` holds a post's LATEST engagement (refreshEngagement overwrites it in place), so it can say
+-- how a post is doing now but never how it got there. This table is the curve: append-only, one row
+-- per post per UTC day.
+--
+-- INVARIANT — PK (post_id, captured_on): a second capture in a day REPLACES the first. That is what
+-- makes the rolling re-scrape safe to re-run, and stops a double run inserting a phantom flat day.
+--
+-- INVARIANT — `captured_at` is the real instant and is NOT redundant. Post age (and therefore which
+-- "day N" slot a capture fills) is measured from posted_at to captured_at. Two posts published 14
+-- hours apart share a capture date while being a day apart in maturity.
+--
+-- No FK to posts: the snapshot pipeline must never be able to block a post insert, and an orphan row
+-- is harmless (it simply never joins).
+CREATE TABLE IF NOT EXISTS post_snapshots (
+  post_id     TEXT NOT NULL,
+  captured_on TEXT NOT NULL,               -- 'YYYY-MM-DD' UTC day key
+  captured_at TEXT NOT NULL,               -- ISO-8601 UTC instant of the capture
+  likes       INTEGER NOT NULL,
+  comments    INTEGER NOT NULL,
+  shares      INTEGER NOT NULL,
+  PRIMARY KEY (post_id, captured_on)
+);
+CREATE INDEX IF NOT EXISTS post_snapshots_day_idx ON post_snapshots(captured_on DESC);

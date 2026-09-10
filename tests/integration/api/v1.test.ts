@@ -143,13 +143,11 @@ describe('GET /api/v1/authors, /creators, /keywords, /profiles', () => {
     expect(body.authors.map((a: { author_id: string }) => a.author_id)).toEqual(['jane'])
   })
 
-  it('ignores an unrecognized creator tier/platform rather than casting it into the query', async () => {
+  it('ignores an unrecognized creator platform rather than casting it into the query', async () => {
     upsertCreator({ platform: 'linkedin', profile_url: 'https://www.linkedin.com/in/jane', author_id: 'jane' })
     // Same typo that /api/v1/posts ignores — both endpoints must agree, not return opposite answers.
     const typo = await (await creators(authed('/creators?platform=LinkedIn'))).json()
     expect(typo.creators).toHaveLength(1)
-    const bogus = await (await creators(authed('/creators?tier=platinum'))).json()
-    expect(bogus.creators).toHaveLength(1)
   })
 
   it('lists creators and keyword sets', async () => {

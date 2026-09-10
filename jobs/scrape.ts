@@ -57,6 +57,11 @@ export interface RunScrapeOptions {
   timeframe: Timeframe
   market: string
   includeNotes?: boolean // Substack: also scrape the Notes feed (§17). Off by default.
+  // Twitter KEYWORD runs only (§11.8): X applies `min_faves` in its own search index, so the run
+  // returns — and Apify bills for — only tweets that already cleared the bar. Deliberately NOT
+  // applied to creator runs: x-factor's baseline is the mean of an author's own posts, so filtering
+  // out a creator's weak posts would inflate every baseline and break the score.
+  minimumFavorites?: number
   // The API route creates the scrape_jobs row up front so it can return the id immediately (PRD
   // §10.6) and then fire runScrape without awaiting. When absent, runScrape creates its own job.
   jobId?: string
@@ -72,8 +77,9 @@ interface ActorRun {
 
 // Drain up to this many unembedded posts after a scrape (Voyage batches internally at 100).
 const ENRICH_LIMIT = 200
-// Transcribe up to this many Instagram videos per scrape (§18) — bounded so a single transcript actor
-// run stays within the poll ceiling; the /api/transcribe route drains the rest in further batches.
+// Transcribe up to this many Instagram videos per scrape (§18). Running it HERE, right after the
+// scrape, is what makes AssemblyAI viable: it fetches the audio from the post's own media url, and
+// Instagram signs those urls so they expire within days. The /api/transcribe route drains the rest.
 const TRANSCRIBE_LIMIT = 25
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -107,7 +113,7 @@ function planRuns(opts: RunScrapeOptions): ActorRun[] {
   if (wantCreator) {
     const all = listCreators().creators
     creators = (
-      opts.creatorIds?.length ? all.filter((c) => opts.creatorIds!.includes(c.id)) : all.filter((c) => c.tier === 'core')
+      opts.creatorIds?.length ? all.filter((c) => opts.creatorIds!.includes(c.id)) : all
     ).map((c) => ({ platform: c.platform, profile_url: c.profile_url, author_id: c.author_id }))
   }
 
@@ -127,7 +133,14 @@ function planRuns(opts: RunScrapeOptions): ActorRun[] {
       // Twitter uses ONE actor for both modes; only the input shape differs (CLAUDE.md invariant).
       const tweetActor = settings.apify_tweet_actor_id
       if (wantKeyword && keywords.length > 0 && tweetActor) {
-        runs.push({ source: 'keyword', platform, actorId: tweetActor, input: buildTwitterKeywordInput(keywords) })
+        runs.push({
+          source: 'keyword',
+          platform,
+          actorId: tweetActor,
+          input: buildTwitterKeywordInput(keywords, {
+            ...(opts.minimumFavorites !== undefined && { minimumFavorites: opts.minimumFavorites }),
+          }),
+        })
       }
       const handles = creators.filter((c) => c.platform === 'twitter').map((c) => c.author_id).filter((h): h is string => !!h)
       if (wantCreator && handles.length > 0 && tweetActor) {

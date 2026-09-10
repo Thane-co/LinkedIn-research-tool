@@ -14,7 +14,7 @@ import {
   extractTwitterHandle,
   normalizeProfileUrl,
 } from '@/lib/pure/url'
-import type { CreatorTier, Platform } from '@/lib/types'
+import type { Platform } from '@/lib/types'
 
 // Reads/writes the live DB — never statically prerender/cache.
 export const dynamic = 'force-dynamic'
@@ -62,7 +62,6 @@ function parseCreatorInput(raw: string): ParsedCreator | null {
 export async function GET(req: Request): Promise<NextResponse> {
   const url = new URL(req.url)
   const filter = {
-    tier: (url.searchParams.get('tier') as CreatorTier | null) ?? undefined,
     tag: url.searchParams.get('tag') ?? undefined,
     platform: (url.searchParams.get('platform') as Platform | null) ?? undefined,
   }
@@ -75,7 +74,6 @@ export async function POST(req: Request): Promise<NextResponse> {
   const body = (await req.json()) as {
     input?: string
     inputs?: string[]
-    tier?: CreatorTier
     tags?: string[]
     market?: string
     notes?: string
@@ -107,7 +105,6 @@ export async function POST(req: Request): Promise<NextResponse> {
       author_id: p.author_id,
       display_name: displayName,
       persona,
-      tier: body.tier,
       tags: body.tags,
       market: body.market,
       notes: body.notes ?? null,

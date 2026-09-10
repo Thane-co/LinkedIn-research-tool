@@ -11,7 +11,7 @@ import {
   MIN_GROUP_SIZE,
 } from '@/lib/config'
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '@/lib/db/posts.repo'
-import { SORTS, TIMEFRAMES, VALID_PLATFORMS } from '@/lib/posts-query'
+import { MATCH_MODES, SORTS, TIMEFRAMES, VALID_PLATFORMS } from '@/lib/posts-query'
 
 type ParamType = 'string' | 'integer' | 'number' | 'boolean'
 
@@ -36,10 +36,25 @@ export const FILTER_PARAMS: readonly ApiParam[] = [
     name: 'q',
     type: 'string',
     description:
-      'Comma-separated substrings matched against post content (OR). Alias of `keywords`; both are combined.',
+      'Comma-separated terms, full-text searched over post content. Matching is by WORD, not substring ("ops" will not match "stops"), and is stemmed, so "hire" also finds hiring/hired/hires. A term containing a space is a PHRASE ("cold outbound" requires those words adjacent, in order). Terms combine per `match`. Query operators are not interpreted — a term is searched for literally. Alias of `keywords`; both are combined.',
     example: 'ai agents,claude code',
   },
   { name: 'keywords', type: 'string', description: 'Same as `q`.', example: 'hiring' },
+  {
+    name: 'semantic',
+    type: 'boolean',
+    description:
+      'Set true to ALSO retrieve by meaning: the query is embedded and matched against post vectors, and those hits are fused with the keyword hits (reciprocal rank fusion). Finds posts that never use your words — "hiring is broken" reaches "recruiting is a mess". Requires q/keywords. All other filters still apply as hard pre-filters. Ordering defaults to the fused rank; `total` is then the size of the fused candidate set, not a corpus-wide count. If the query cannot be embedded the request still succeeds with keyword-only results and a warning.',
+    example: 'true',
+  },
+  {
+    name: 'match',
+    type: 'string',
+    description:
+      'How multiple `q`/`keywords` terms combine: `any` returns posts matching at least one term, `all` requires every term. Default: any. Use `all` to narrow a broad topic search.',
+    enum: MATCH_MODES,
+    example: 'all',
+  },
   {
     name: 'platform',
     type: 'string',
@@ -75,7 +90,13 @@ export const FILTER_PARAMS: readonly ApiParam[] = [
 ]
 
 const PAGING_PARAMS: readonly ApiParam[] = [
-  { name: 'sort', type: 'string', description: 'Ordering. Default: recent (posted_at desc).', enum: SORTS },
+  {
+    name: 'sort',
+    type: 'string',
+    description:
+      'Ordering. Default: recent (posted_at desc). `relevance` ranks by full-text match quality (bm25) and therefore requires `q`/`keywords`; without them it falls back to recent.',
+    enum: SORTS,
+  },
   { name: 'page', type: 'integer', description: '1-based page number. Default: 1.' },
   {
     name: 'pageSize',
@@ -150,10 +171,9 @@ export const READONLY_ENDPOINTS: readonly ApiEndpoint[] = [
   {
     path: '/api/v1/creators',
     operationId: 'listCreators',
-    summary: 'The tracked creator list (the accounts scraped on purpose), with tiers, tags, and personas.',
+    summary: 'The tracked creator list (the accounts scraped on purpose), with tags and personas.',
     params: [
       { name: 'platform', type: 'string', description: 'Filter by platform.', enum: VALID_PLATFORMS },
-      { name: 'tier', type: 'string', description: 'Filter by tier.', enum: ['core', 'watch'] as const },
       { name: 'tag', type: 'string', description: 'Filter by a single tag.' },
     ],
   },
@@ -195,7 +215,7 @@ export function buildManifest(): Record<string, unknown> {
       platform: VALID_PLATFORMS,
       timeframe: TIMEFRAMES,
       sort: SORTS,
-      tier: ['core', 'watch'],
+      match: MATCH_MODES,
     },
     defaults: {
       pageSize: DEFAULT_PAGE_SIZE,
@@ -208,6 +228,7 @@ export function buildManifest(): Record<string, unknown> {
     notes: [
       'x_factor = a post’s weighted engagement (likes·1 + comments·3 + shares·5) ÷ the same author’s mean weighted engagement over the prior 30 days. It needs ≥3 prior posts, so it is null on new authors.',
       'Grouping modes return every candidate in `posts` plus the groups as id lists — resolve members by id.',
+      'Keyword search is FTS5: whole words (not substrings), stemmed, phrases when a term contains a space. Add semantic=true to union in meaning-based hits.',
       'Image and vector data are never serialized; `media` carries the renderable urls.',
     ],
     endpoints: READONLY_ENDPOINTS.map((e) => ({

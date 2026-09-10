@@ -34,7 +34,56 @@ const ADDITIVE_COLUMNS: { table: string; column: string; type: string }[] = [
   { table: 'posts', column: 'media', type: 'TEXT' }, // §10.3.1 post media
   { table: 'posts', column: 'transcript', type: 'TEXT' }, // §18 video transcript
   { table: 'creators', column: 'persona', type: 'TEXT' }, // §17.2 cross-platform persona key
+  // §21.8 follower-tracking opt-in. NOT NULL DEFAULT 0 is safe to add to an existing table: SQLite
+  // backfills every existing row with the default, which is exactly the intent (opt-in, not opt-out).
+  { table: 'creators', column: 'track_followers', type: 'INTEGER NOT NULL DEFAULT 0' },
 ]
+
+/**
+ * Schema version stamped into `PRAGMA user_version`, for migrations that DDL alone can't express.
+ *   1 — posts_fts (§11.1): the index must be BACKFILLED for posts inserted before it existed.
+ *   2 — follower_snapshots (§21): seed each already-scraped profile's follower count as the series'
+ *       first data point, so the leaderboard has a baseline immediately instead of after 24h.
+ *   3 — drop `creators.tier`. The core/watch split was never used (the PRD says v1 has one creator
+ *       list) but the column outlived the idea, and 7 creators silently sat on 'watch' — which the
+ *       default creator scrape filtered OUT. A dead column that quietly changes behaviour is worse
+ *       than no column.
+ * Bump this (and add a case to applyVersionedMigrations) whenever the search index must be rebuilt,
+ * e.g. if the tokenizer or the indexed columns change.
+ */
+export const SCHEMA_VERSION = 3
+
+/**
+ * Data migrations that must run exactly once, gated on `user_version`. CREATE TABLE IF NOT EXISTS
+ * gives an existing db an EMPTY posts_fts, and an empty index is indistinguishable from "nothing
+ * matched" at query time — so the rebuild has to be driven by a version stamp, not by inspection.
+ * The rebuild is O(corpus): ~3s for ~90k posts, once, on the first open after upgrading.
+ */
+function applyVersionedMigrations(db: Database.Database): void {
+  const current = db.pragma('user_version', { simple: true }) as number
+  if (current >= SCHEMA_VERSION) return
+  if (current < 1) {
+    db.exec("INSERT INTO posts_fts(posts_fts) VALUES('rebuild')")
+  }
+  if (current < 2) {
+    // DO NOTHING, not DO UPDATE: a real capture always outranks a seed. `followers > 0` because a
+    // profile that returned no count is missing data, and storing it as a measurement would invent
+    // a crash on the seed day and a matching spike on the first real capture.
+    db.exec(`INSERT INTO follower_snapshots (author_id, platform, captured_on, captured_at, followers, connections, source)
+             SELECT id, 'linkedin', substr(scraped_at, 1, 10), scraped_at, followers, connections, 'seed'
+             FROM profiles WHERE followers > 0
+             ON CONFLICT(author_id, platform, captured_on) DO NOTHING`)
+  }
+  if (current < 3) {
+    // Guarded: a fresh db created from the current schema.sql never had the column.
+    const hasTier = (db.pragma('table_info(creators)') as { name: string }[]).some((c) => c.name === 'tier')
+    if (hasTier) {
+      db.exec('DROP INDEX IF EXISTS creators_tier_idx')
+      db.exec('ALTER TABLE creators DROP COLUMN tier')
+    }
+  }
+  db.pragma(`user_version = ${SCHEMA_VERSION}`)
+}
 
 /** Run the schema DDL idempotently against the given (or singleton) connection, then seed defaults. */
 export function migrate(db?: Database.Database): void {
@@ -55,6 +104,7 @@ export function migrate(db?: Database.Database): void {
   // Indexes on additive columns run here (not in schema.sql) so the column is guaranteed to exist on
   // a legacy db that predates it (§17.2 persona).
   target.exec('CREATE INDEX IF NOT EXISTS creators_persona_idx ON creators(persona)')
+  applyVersionedMigrations(target)
   seedSettingsDefaults(target)
 }
 

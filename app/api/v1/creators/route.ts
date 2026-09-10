@@ -5,11 +5,9 @@ import { NextResponse } from 'next/server'
 import { requireReadToken } from '@/lib/api-readonly'
 import { listCreators } from '@/lib/db/creators.repo'
 import { VALID_PLATFORMS } from '@/lib/posts-query'
-import type { CreatorTier, Platform } from '@/lib/types'
+import type { Platform } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
-
-const TIERS: readonly CreatorTier[] = ['core', 'watch']
 
 /** Drop an unrecognized value instead of casting it into the query. Blindly casting `platform` meant
  *  `platform=LinkedIn` returned an empty list here while the same typo on /api/v1/posts returned
@@ -23,6 +21,5 @@ export async function GET(req: Request): Promise<NextResponse> {
   if (blocked) return blocked
   const sp = new URL(req.url).searchParams
   const platform = oneOf(VALID_PLATFORMS as readonly Platform[], sp.get('platform')?.toLowerCase() ?? null)
-  const tier = oneOf(TIERS, sp.get('tier')?.toLowerCase() ?? null)
-  return NextResponse.json(listCreators({ tier, tag: sp.get('tag') ?? undefined, platform }))
+  return NextResponse.json(listCreators({ tag: sp.get('tag') ?? undefined, platform }))
 }

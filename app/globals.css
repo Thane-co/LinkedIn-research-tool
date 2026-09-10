@@ -375,6 +375,22 @@ button[aria-pressed='true']:hover:not(:disabled) {
   width: 100%;
   box-sizing: border-box;
 }
+/* A checkbox + label pair sitting inline among the keyword chips (§9.5 meaning toggle). Unlike
+   .filter-bar__field it must NOT stretch its input to 100% — a checkbox is intrinsically sized. */
+.filter-bar__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.filter-bar__toggle input {
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+}
 .filter-bar__keywords {
   flex: 1 1 300px; /* grows to absorb the slack on its row */
   display: flex;
@@ -659,6 +675,20 @@ button[aria-pressed='true']:hover:not(:disabled) {
   border: 1px solid var(--border);
   display: block;
 }
+/* Stands in for an image whose signed CDN link has expired (§10.3.2). Sized like a real thumbnail so
+   a card with dead media keeps the same rhythm as one with live media, but visibly inert. */
+.post-card__image--unavailable {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 96px;
+  background: var(--surface-2);
+  border: 1px dashed var(--border-strong);
+  color: var(--text-muted);
+  font-size: 22px;
+  opacity: 0.55;
+  user-select: none;
+}
 /* carousel: horizontal scroll strip */
 .post-card__carousel {
   position: relative;
@@ -869,18 +899,6 @@ button[aria-pressed='true']:hover:not(:disabled) {
 .creators__add input {
   min-width: 220px;
 }
-.creators__list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-.creators__row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 4px;
-  border-top: 1px solid var(--border);
-}
 .creators__name {
   font-weight: 600;
 }
@@ -888,13 +906,7 @@ button[aria-pressed='true']:hover:not(:disabled) {
   color: var(--text-muted);
   font-size: 12px;
 }
-.creators__tags {
-  display: inline-flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  margin-left: auto;
-}
-.creators__row > button:last-child {
+.creators__account > button:last-child {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border-strong));
 }
@@ -1087,188 +1099,514 @@ button[aria-pressed='true']:hover:not(:disabled) {
 }
 
 /* ---------------------------------------------------------------------------
-   Temporary tab: ig-compare (app/IgCompare.tsx). Delete this block along with
-   app/IgCompare.tsx + lib/ig-compare/ + app/api/ig-compare/ when the tab is removed.
+   Per-platform scrape cards + the creator person x platform table (PRD §11.8).
+   Tokens only — no raw hex, no raw spacing (CLAUDE.md styling rule).
 --------------------------------------------------------------------------- */
-.igc-header {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+
+.platform-scrape {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space);
   margin-bottom: var(--space);
 }
-.igc-gate {
+
+.platform-scrape__hint {
+  color: var(--text-muted);
+  margin: 0 0 var(--space);
+}
+
+.platform-scrape__error {
+  color: var(--red-fg);
+  background: var(--red-bg);
+  border-radius: var(--radius-sm);
+  padding: calc(var(--space) / 2);
+}
+
+.platform-scrape__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space);
+}
+
+.scrape-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: var(--space);
+  margin: 0;
+}
+
+.scrape-card__legend {
+  display: flex;
+  align-items: baseline;
+  gap: calc(var(--space) / 2);
+  font-weight: 600;
+  padding: 0 calc(var(--space) / 2);
+}
+
+.scrape-card__last {
+  font-weight: 400;
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+
+.scrape-card__sources,
+.scrape-card__options,
+.scrape-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--space) / 2);
+  margin-top: calc(var(--space) / 2);
+}
+
+.scrape-card__sources label {
+  /* flex-direction must be explicit: the global label rule sets `column`, which stacked every
+     checkbox above its own text. */
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: calc(var(--space) / 4);
+}
+
+.scrape-card__options label {
+  display: inline-flex;
+  flex-direction: column;
+  font-size: 0.85em;
+  color: var(--text-muted);
+  gap: calc(var(--space) / 4);
+}
+
+.scrape-card__options input[type='number'] {
+  width: 9ch; /* 7ch clipped "250" once the spinner took its share */
+}
+
+.scrape-card__pill {
+  font-size: 0.85em;
+  border-radius: var(--radius-pill);
+  padding: calc(var(--space) / 4) calc(var(--space) / 2);
+}
+
+.scrape-card__pill[data-status='idle'] {
+  display: none;
+}
+
+.scrape-card__pill[data-status='running'] {
+  background: var(--gray-bg);
+  color: var(--gray-fg);
+}
+
+.scrape-card__pill[data-status='succeeded'] {
+  background: var(--green-bg);
+  color: var(--green-fg);
+}
+
+.scrape-card__pill[data-status='failed'],
+.scrape-card__pill[data-status='blocked'] {
+  background: var(--red-bg);
+  color: var(--red-fg);
+}
+
+.manual-scrape-fallback {
+  margin-bottom: var(--space);
+  color: var(--text-muted);
+}
+
+.creators__platform-counts,
+.creators__linked {
+  color: var(--text-muted);
+  font-size: 0.85em;
+}
+
+.creators__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--space);
+  /* Fixed layout so the four platform columns line up down the whole table; with `auto`, one long
+     url in one row widened that row's cell and the columns wandered. */
+  table-layout: fixed;
+}
+
+.creators__table th:first-child {
+  width: 22%;
+}
+
+.creators__table th,
+.creators__table td {
+  border-bottom: 1px solid var(--border);
+  padding: calc(var(--space) / 2);
+  text-align: left;
+  vertical-align: top;
+}
+
+.creators__table thead th {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.creators__table .creators__name {
+  /* NOTE: never `display: flex` here — a flex <th> leaves the table layout and the columns collapse. */
+  font-weight: 600;
+}
+
+.creators__person-label {
+  display: block;
+}
+
+.creators__table .chip--person {
+  margin-top: calc(var(--space) / 4);
+}
+
+.creators__account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--space) / 4);
+}
+
+.creators__cell .creators__slug {
+  overflow-wrap: anywhere;
+  font-size: 0.9em;
+}
+
+/* Compact the per-account Remove so a cell stays the width of its column. */
+.creators__account > button {
+  font-size: 0.8em;
+  padding: 0 calc(var(--space) / 4);
+}
+
+.creators__add-cell {
+  background: none;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: calc(var(--space) / 4) calc(var(--space) / 2);
+}
+
+.creators__add-cell:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* ── Champion leaderboard (§21) ────────────────────────────────────────── */
+.growth__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space);
+  flex-wrap: wrap;
+  margin-bottom: var(--space);
+}
+.growth__header h2 {
+  margin: 0;
+}
+.growth__meta {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.growth__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.growth__windows {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.growth__windows button {
+  border: 0;
+  background: var(--surface);
+  color: var(--text-muted);
+  padding: 6px 14px;
+  cursor: pointer;
+  font: inherit;
+}
+.growth__windows button[aria-pressed='true'] {
+  background: var(--primary);
+  color: var(--primary-contrast);
+}
+.growth__capture {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  cursor: pointer;
+  font: inherit;
+}
+.growth__capture:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.growth__error {
   background: var(--red-bg);
   color: var(--red-fg);
   border-radius: var(--radius-sm);
-  padding: 10px 14px;
-  font-size: 13px;
+  padding: 10px 12px;
+  margin: 0 0 var(--space);
 }
-.igc-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.igc-controls input[type='text'] {
-  flex: 1;
-  min-width: 220px;
-}
-.igc-controls input[type='number'] {
-  width: 64px;
-}
-.igc-controls span {
+.growth__note {
   color: var(--text-muted);
-  font-size: 13px;
+  margin: 0 0 var(--space);
 }
-.igc-primary {
-  background: var(--primary);
-  color: var(--primary-contrast);
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 8px 16px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.igc-primary:hover:not(:disabled) {
-  background: var(--primary-hover);
-}
-.igc-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.igc-discover-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-.igc-discover-label {
-  font-weight: 600;
-  color: var(--text);
-}
-.igc-discover-value {
-  font-variant-numeric: tabular-nums;
-}
-.igc-grid {
+
+/* Two boards side by side, stacking on a narrow window. */
+.growth__boards {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
   gap: var(--space);
 }
-@media (max-width: 900px) {
-  .igc-grid {
-    grid-template-columns: 1fr;
-  }
-}
-.igc-panel {
+.growth-board {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: var(--space);
 }
-.igc-panel h3 {
-  font-size: 34px;
-  line-height: 1.1;
+.growth-board__title {
   margin: 0;
-}
-.igc-subtitle {
-  color: var(--text-muted);
   font-size: 15px;
-  margin-top: 6px;
 }
-.igc-stats {
-  display: flex;
-  margin: 16px 0;
-  padding: 14px 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-}
-.igc-stats > div {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 0 32px;
-}
-.igc-stats > div:first-child {
-  padding-left: 0;
-}
-.igc-stats > div:not(:first-child) {
-  border-left: 1px solid var(--border);
-}
-.igc-label {
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.growth-board__caption {
+  margin: 2px 0 12px;
   color: var(--text-muted);
+  font-size: 12px;
 }
-.igc-value {
-  font-size: 40px;
-  font-weight: 800;
-  line-height: 1.1;
-  font-variant-numeric: tabular-nums;
-  transition: color 0.2s ease;
+/* The roster board runs to every creator, so it scrolls in place rather than stretching the page. */
+.growth-board__scroll {
+  max-height: 620px;
+  overflow-y: auto;
 }
-.igc-value--done {
-  color: var(--green-fg);
-}
-.igc-status {
-  color: var(--text-muted);
-  font-style: italic;
-}
-.igc-clips {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.igc-clip {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.igc-clip img {
+.growth-table {
   width: 100%;
-  max-height: 160px;
-  object-fit: cover;
-  border-radius: var(--radius-sm);
-}
-.igc-transcript {
+  border-collapse: collapse;
   font-size: 13px;
-  margin: 0;
-  white-space: pre-wrap;
 }
-.igc-transcript--pending,
-.igc-transcript--empty {
-  color: var(--text-muted);
-  font-style: italic;
-}
-.igc-sentiments {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.igc-tag {
-  border-radius: var(--radius-pill);
-  padding: 2px 10px;
-  font-size: 11px;
+.growth-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  text-align: left;
   font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+  white-space: nowrap;
 }
-.igc-tag--positive {
-  background: var(--green-bg);
-  color: var(--green-fg);
+.growth-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
 }
-.igc-tag--negative {
-  background: var(--red-bg);
-  color: var(--red-fg);
+.growth-table__empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 24px 8px;
 }
-.igc-tag--neutral {
+.growth-table__spark {
+  color: var(--text-muted);
+  width: 68px;
+}
+.growth-name {
+  font-weight: 500;
+}
+.growth-stale {
+  margin-left: 6px;
   background: var(--gray-bg);
   color: var(--gray-fg);
+  border-radius: var(--radius-pill);
+  padding: 1px 7px;
+  font-size: 11px;
 }
-.igc-error {
-  color: var(--danger);
-  font-size: 13px;
+.growth-delta {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.growth-delta--up {
+  color: var(--green-fg);
+}
+.growth-delta--down {
+  color: var(--red-fg);
+}
+.growth-delta--none {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.growth-spark {
+  display: block;
+}
+
+/* Creator drill-down: day-by-day growth with the post that owns each day (§21). */
+.growth-name {
+  font-weight: 500;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--primary);
+  cursor: pointer;
+  text-align: left;
+}
+.growth-name:hover {
+  text-decoration: underline;
+}
+.growth-panel {
+  margin-top: var(--space);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space);
+}
+.growth-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.growth-panel__header h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.growth-panel__header button {
+  border: 0;
+  background: none;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.growth-panel__empty {
+  color: var(--text-muted);
+  margin: 8px 0 0;
+}
+.growth-panel__days {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+.growth-day {
+  border-top: 1px solid var(--border);
+  padding: 8px 0;
+}
+.growth-day__head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.growth-day__date {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  min-width: 92px;
+}
+.growth-day__total {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.growth-day__attr {
+  margin-top: 2px;
+  font-size: 12px;
+}
+.growth-day__muted {
+  color: var(--text-muted);
+}
+
+/* Tracked-creator picker (§21.8) — choose who the daily capture covers. */
+.picker {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 12px var(--space);
+  margin-bottom: var(--space);
+}
+.picker__summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.picker__summary h3 {
+  margin: 0;
+  font-size: 15px;
+  display: inline;
+}
+.picker__count {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.picker__hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin: 10px 0;
+}
+.picker__filter {
+  width: 100%;
+  max-width: 320px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  margin-bottom: 10px;
+}
+.picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.picker__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+.picker__row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.picker__name {
+  font-weight: 500;
+}
+.picker__stats {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Post growth board (§22) — engagement at equal age. */
+.pgrowth {
+  margin-top: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space);
+}
+.pgrowth__excerpt {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pgrowth__excerpt a {
+  color: var(--primary);
+  text-decoration: none;
+}
+.pgrowth__excerpt a:hover {
+  text-decoration: underline;
 }
