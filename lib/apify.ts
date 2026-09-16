@@ -6,7 +6,6 @@ import { fetchWithTimeout } from '@/lib/http'
 import { getKey } from '@/lib/settings'
 import type {
   ApifyInstagramPost,
-  ApifyInstagramTranscript,
   ApifyPost,
   ApifyProfile,
   ApifySubstackPost,
@@ -108,6 +107,19 @@ export function buildLinkedInCreatorInput(profileUrls: string[], timeframe: Time
   }
 }
 
+/**
+ * §23 comments input for harvestapi/linkedin-post-comments. `maxItems: 0` asks for every comment, and
+ * `scrapeReplies` returns replies as separate items so her own answers are captured too. Profile
+ * enrichment is left at the actor's default: each comment already carries name, slug and headline.
+ */
+export function buildLinkedInCommentsInput(postUrls: string[]): object {
+  return {
+    posts: postUrls,
+    maxItems: 0,
+    scrapeReplies: true,
+  }
+}
+
 export function buildTwitterKeywordInput(
   keywords: string[],
   opts?: { minimumFavorites?: number; start?: string; end?: string; tweetLanguage?: string },
@@ -199,19 +211,6 @@ export function buildInstagramCreatorInput(
 }
 
 /**
- * Instagram transcript input (§18) for crawlerbros/instagram-transcript-scraper. `videoUrls` are the
- * post/reel urls to transcribe; `transcriptionMethod:'auto'` tries Instagram's native captions first,
- * then falls back to Whisper. Segments are off — we only store the single-string transcript.
- */
-export function buildInstagramTranscriptInput(videoUrls: string[]): object {
-  return {
-    videoUrls,
-    transcriptionMethod: 'auto',
-    includeSegments: false,
-  }
-}
-
-/**
  * LinkedIn PROFILE scraper input (§19) for harvestapi/linkedin-profile-scraper. `queries` accepts full
  * profile urls OR bare public identifiers (e.g. 'basiakubicka'). `profileScraperMode` picks the pricing
  * tier — the cheaper details-only tier (no email lookup) is all the research/profile-rewrite use case
@@ -253,7 +252,7 @@ export async function runActor(
   actorId: string,
   input: object,
   opts?: { maxPolls?: number },
-): Promise<(ApifyPost | ApifyTweet | ApifySubstackPost | ApifyInstagramPost | ApifyInstagramTranscript | ApifyProfile)[]> {
+): Promise<(ApifyPost | ApifyTweet | ApifySubstackPost | ApifyInstagramPost | ApifyProfile)[]> {
   const token = requireToken()
   const maxPolls = opts?.maxPolls ?? MAX_POLLS
 
@@ -317,7 +316,7 @@ export async function runActor(
         ITEMS_TIMEOUT_MS,
       )
       if (!itemsRes.ok) throw new Error(`Apify: failed to fetch dataset ${defaultDatasetId} (${itemsRes.status})`)
-      return (await itemsRes.json()) as (ApifyPost | ApifyTweet | ApifySubstackPost | ApifyInstagramPost | ApifyInstagramTranscript | ApifyProfile)[]
+      return (await itemsRes.json()) as (ApifyPost | ApifyTweet | ApifySubstackPost | ApifyInstagramPost | ApifyProfile)[]
     } catch (err) {
       lastErr = err
       if (attempt < ITEMS_FETCH_ATTEMPTS) await sleep(POLL_INTERVAL_MS)

@@ -5,6 +5,8 @@
 import {
   EMBEDDING_BATCH_SIZE,
   IMAGE_EMBEDDING_MODEL,
+  IMAGE_FETCH_TIMEOUT_MS,
+  MAX_IMAGE_BYTES,
   TEXT_EMBEDDING_MODEL,
   VOYAGE_MULTIMODAL_URL,
   VOYAGE_TEXT_URL,
@@ -21,6 +23,8 @@ function requireKey(): string {
 }
 
 const EMBED_TIMEOUT_MS = 60_000 // per-request timeout so a hung embed batch can't wedge enrich (PRD §10.7)
+const IMAGE_FETCH_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36'
 
 const authHeaders = (key: string): Record<string, string> => ({
   authorization: `Bearer ${key}`,
@@ -62,16 +66,53 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
   return out
 }
 
-/** Embed a single image url with voyage-multimodal-3. */
+/**
+ * Download an image and return it as a `data:` url.
+ *
+ * Why we fetch it ourselves instead of handing Voyage the url: LinkedIn's CDN blocks Voyage's
+ * server-side fetcher. It answers 400 "The image URL you have provided is invalid" even for urls
+ * that are signed, unexpired, and return 200 to this machine — so the url path embedded nothing at
+ * all from LinkedIn, which is ~99% of the corpus's images.
+ *
+ * The url comes from scraped data, and this fetch runs server-side, so the scheme is checked the
+ * same way `safeHref` checks one before rendering it: http(s) only, never file:/data:.
+ */
+async function fetchImageAsDataUrl(url: string): Promise<string> {
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error(`Voyage: refusing to fetch a non-http(s) image url (${url.slice(0, 40)})`)
+  }
+  // A browser-ish UA: some CDNs answer 403 to a bare fetch for an otherwise public image.
+  const res = await fetchWithTimeout(
+    url,
+    { headers: { 'user-agent': IMAGE_FETCH_USER_AGENT, accept: 'image/*' } },
+    IMAGE_FETCH_TIMEOUT_MS,
+  )
+  // Distinct from a Voyage failure on purpose: 403/404 here means the signed url expired and only a
+  // re-scrape can mint a new one, which is a different fix from "the embedder is down".
+  if (!res.ok) throw new Error(`Voyage: image fetch failed (${res.status}) for ${url.slice(0, 60)}`)
+
+  const contentType = (res.headers.get('content-type') ?? '').split(';')[0]!.trim()
+  if (!contentType.startsWith('image/')) {
+    throw new Error(`Voyage: not an image (content-type '${contentType || 'none'}')`)
+  }
+  const bytes = Buffer.from(await res.arrayBuffer())
+  if (bytes.length > MAX_IMAGE_BYTES) {
+    throw new Error(`Voyage: image too large (${bytes.length} bytes > ${MAX_IMAGE_BYTES})`)
+  }
+  return `data:${contentType};base64,${bytes.toString('base64')}`
+}
+
+/** Embed a single image with voyage-multimodal-3, sending the bytes inline (see above). */
 export async function embedImage(url: string): Promise<number[]> {
-  const key = requireKey()
+  const key = requireKey() // before the download, so a missing key costs no bandwidth
+  const dataUrl = await fetchImageAsDataUrl(url)
   const res = await fetchWithTimeout(
     VOYAGE_MULTIMODAL_URL,
     {
       method: 'POST',
       headers: authHeaders(key),
       body: JSON.stringify({
-        inputs: [{ content: [{ type: 'image_url', image_url: url }] }],
+        inputs: [{ content: [{ type: 'image_base64', image_base64: dataUrl }] }],
         model: IMAGE_EMBEDDING_MODEL,
       }),
     },

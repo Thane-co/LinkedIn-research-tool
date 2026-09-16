@@ -109,6 +109,41 @@ export function mediaProxySrc(url: string | null | undefined): string | undefine
   }
 }
 
+// A signed media url is only good until its expiry; after that the CDN answers 403 forever. Bounds
+// keep a false positive impossible-ish: a stray `e=` that is not a timestamp must NOT hide a live
+// image, so anything outside [2001, 2100] is read as "carries no expiry".
+const MIN_PLAUSIBLE_EXPIRY_S = 1_000_000_000 // 2001-09-09
+const MAX_PLAUSIBLE_EXPIRY_S = 4_102_444_800 // 2100-01-01
+
+/**
+ * The expiry baked into a signed CDN media url, as epoch **milliseconds**, or null when it has none.
+ *
+ * Two conventions, both confirmed against this corpus:
+ *   • LinkedIn `media.licdn.com` — `e=<seconds>` in **decimal**
+ *   • Instagram/Facebook `*.cdninstagram.com` — `oe=<seconds>` in **hex**
+ */
+export function mediaUrlExpiry(url: string | null | undefined): number | null {
+  if (!url) return null
+  const hex = /[?&]oe=([0-9A-Fa-f]+)(?:&|$)/.exec(url)
+  const dec = /[?&]e=(\d+)(?:&|$)/.exec(url)
+  const seconds = hex ? parseInt(hex[1]!, 16) : dec ? Number(dec[1]) : NaN
+  if (!Number.isFinite(seconds)) return null
+  if (seconds < MIN_PLAUSIBLE_EXPIRY_S || seconds > MAX_PLAUSIBLE_EXPIRY_S) return null
+  return seconds * 1000
+}
+
+/**
+ * True when this media url is provably dead: it is signed and its expiry has passed.
+ *
+ * Lets the card skip rendering an image it KNOWS will 403, without a network round trip. Unsigned
+ * urls and local paths report false — there is nothing to go on, so they are attempted and any
+ * failure is caught by the img's own onError.
+ */
+export function isExpiredMediaUrl(url: string | null | undefined, now: number = Date.now()): boolean {
+  const expiry = mediaUrlExpiry(url)
+  return expiry !== null && expiry <= now
+}
+
 // Instagram path segments that are features, not a profile handle.
 const INSTAGRAM_RESERVED = new Set(['p', 'reel', 'reels', 'tv', 'explore', 'stories', 's', 'accounts'])
 

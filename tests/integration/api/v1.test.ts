@@ -53,6 +53,8 @@ describe('read-only API — auth', () => {
       expect((await handler(authed(path))).status, `${path} authed`).toBe(200)
     }
     expect((await postById(anon('/posts/x'), { params: { id: 'x' } })).status).toBe(401)
+    const { GET: postComments } = await import('@/app/api/v1/posts/[id]/comments/route')
+    expect((await postComments(anon('/posts/x/comments'), { params: { id: 'x' } })).status).toBe(401)
   })
 
   it('exposes only GET handlers — no mutating export exists on any v1 route', async () => {
@@ -60,6 +62,7 @@ describe('read-only API — auth', () => {
       import('@/app/api/v1/route'),
       import('@/app/api/v1/posts/route'),
       import('@/app/api/v1/posts/[id]/route'),
+      import('@/app/api/v1/posts/[id]/comments/route'),
       import('@/app/api/v1/authors/route'),
       import('@/app/api/v1/creators/route'),
       import('@/app/api/v1/keywords/route'),
@@ -118,6 +121,21 @@ describe('GET /api/v1/posts', () => {
     ])
     const body = await (await posts(authed('/posts?discoverTrends=true'))).json()
     expect(body.contentClusters[0].postIds.sort()).toEqual(['a', 'b'])
+  })
+})
+
+describe('GET /api/v1/posts/[id]/comments (§23)', () => {
+  it('returns the stored comments without raw_data, and 404s an unknown post', async () => {
+    const { GET: postComments } = await import('@/app/api/v1/posts/[id]/comments/route')
+    const { upsertComments } = await import('@/lib/db/comments.repo')
+    const { makeCommentRow } = await import('@/tests/fixtures/comments')
+    seed([{ id: 'a', comments: 1 }])
+    upsertComments([makeCommentRow({ id: 'c1', post_id: 'a', raw_data: '{"secret":1}' })])
+
+    const body = await (await postComments(authed('/posts/a/comments'), { params: { id: 'a' } })).json()
+    expect(body.comments.map((c: { id: string }) => c.id)).toEqual(['c1'])
+    expect(body.comments[0].raw_data).toBeUndefined()
+    expect((await postComments(authed('/posts/zzz/comments'), { params: { id: 'zzz' } })).status).toBe(404)
   })
 })
 

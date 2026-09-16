@@ -162,6 +162,13 @@ export const READONLY_ENDPOINTS: readonly ApiEndpoint[] = [
     params: [],
   },
   {
+    path: '/api/v1/posts/{id}/comments',
+    operationId: 'getPostComments',
+    summary:
+      "Stored comments and replies on one post, oldest first. Only the owner's own posts are scraped for comments, so every other post returns an empty list. `parent_comment_id` links a reply to the comment it answers, `is_post_author` marks the owner's replies, and `total_on_linkedin` is LinkedIn's count, so a partial set reads as partial.",
+    params: [],
+  },
+  {
     path: '/api/v1/authors',
     operationId: 'listAuthors',
     summary:

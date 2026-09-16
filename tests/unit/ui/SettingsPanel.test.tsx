@@ -40,6 +40,18 @@ describe('SettingsPanel', () => {
     expect(link.some((a) => a.getAttribute('href') === 'https://apify.com/apify/instagram-post-scraper')).toBe(true)
   })
 
+  it('shows the comments actor and her own author id, which scopes comment scraping (§23)', () => {
+    render(
+      <SettingsPanel
+        view={view({
+          settings: { apify_comments_actor_id: 'harvestapi/linkedin-post-comments', own_linkedin_author_id: 'basiakubicka' },
+        })}
+      />,
+    )
+    expect(screen.getByLabelText(/comments actor/i)).toHaveValue('harvestapi/linkedin-post-comments')
+    expect(screen.getByLabelText(/your linkedin author id/i)).toHaveValue('basiakubicka')
+  })
+
   it('surfaces a save failure instead of silently reporting success', async () => {
     server.use(http.put('*/api/settings', () => new HttpResponse(null, { status: 500 })))
     render(<SettingsPanel view={view()} />)

@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { DashboardClient } from '@/app/DashboardClient'
 import { GrowthBoard } from '@/app/GrowthBoard'
+import { OwnAuthorContext } from '@/app/OwnAuthor'
 import { ScrapeSettings } from '@/app/ScrapeSettings'
 import type { SettingsView } from '@/app/SettingsPanel'
 import { apiFetch } from '@/lib/api-client'
@@ -62,7 +63,11 @@ export default function Page() {
         </button>
       </nav>
 
-      {route === 'search' && <DashboardClient />}
+      {route === 'search' && (
+        <OwnAuthorContext.Provider value={view.settings.own_linkedin_author_id || null}>
+          <DashboardClient />
+        </OwnAuthorContext.Provider>
+      )}
       {route === 'growth' && <GrowthBoard />}
       {route === 'settings' && <ScrapeSettings view={view} onSaved={setView} />}
     </main>

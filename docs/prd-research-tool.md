@@ -409,6 +409,8 @@ Known keys (seeded with non-secret defaults on first migrate; secrets start NULL
 | `apify_profile_actor_id` | `harvestapi/linkedin-profile-posts` | no | editable |
 | `apify_tweet_actor_id` | `apidojo/tweet-scraper` | no | editable; used for **both** tweet search & profile modes |
 | `apify_substack_actor_id` | `brilliant_gum/substack-insights-scraper` | no | editable; used for **both** Substack search & publication modes (§17) |
+| `apify_comments_actor_id` | `harvestapi/linkedin-post-comments` | no | editable; comments on the owner's own posts only (§23) |
+| `own_linkedin_author_id` | _(empty)_ | no | the owner's LinkedIn slug; comment scraping is refused until set (§23) |
 | `default_market` | `ai` | no | |
 
 Rules:
@@ -1909,6 +1911,7 @@ All GET, all under `/api/v1`, all token-gated, all `force-dynamic`.
 | `/api/v1/stats` | `getCorpusStats()` — posts/authors/likes/date-range per platform, posts per market, enrichment counts, creator count, `lastScrapedAt`. The orienting call. |
 | `/api/v1/posts` | `runPostsQuery()` — the §11.1 filter set, paginated, or `imageGroups` / `contentClusters` under `groupByImage` / `discoverTrends` (§9). Plus `q` as an alias for `keywords`. |
 | `/api/v1/posts/{id}` | One serialized post (404 when absent). |
+| `/api/v1/posts/{id}/comments` | `postCommentsView()` (§23): stored comments and replies, oldest first, no `raw_data`, plus LinkedIn's `total_on_linkedin`; 404 when the post is absent. Only the owner's posts ever have comments. |
 | `/api/v1/authors` | `getAvailableAuthors(filters)` — the `author_id` values to filter by. |
 | `/api/v1/creators` | `listCreators({tag,platform})`. The `tier` filter was removed with the column (SCHEMA_VERSION 3). |
 | `/api/v1/keywords` | `listKeywords()` grouped by market. |
@@ -2124,3 +2127,71 @@ repeatable format.
 Same rule as §21: the schedule lives in **launchd, never in the app**.
 `scripts/refresh-engagement.mjs` drives the real route rather than reimplementing the job.
 See `docs/post-growth-tracking.md`.
+
+---
+
+## 23. Comments on the owner's own posts
+
+§22 measures how much a post was commented on. §23 stores **what was said**: every comment and reply
+on the owner's own LinkedIn posts, attached to the post, so the conversation can be mined (questions
+asked, objections, additions to a framework) instead of re-read by hand on LinkedIn.
+
+### 23.1 Invariants
+- **Own posts only.** A post qualifies only when its stored `author_id` equals the
+  `own_linkedin_author_id` setting. The job refuses any other post BEFORE the actor is called. An
+  explicit request naming someone else's post, or a post id never stored (whose author cannot be
+  checked), is refused whole (`NotOwnPostError`, a 403), so a mixed list never half-runs. With the
+  setting empty, nothing runs (412).
+- **A comment is filed under the post it came from, or not stored.** `post_id` comes from the item's
+  `postId` urn (falling back to its url). A returned comment for a post that was not requested is
+  dropped and counted, never filed under a requested post.
+- **Replies arrive nested and are stored as their own rows.** The actor returns top-level comments as
+  items and puts each one's replies in a `replies` array on it, one level deep (verified 2026-09-15:
+  243 comments carrying 66 replies on a 309-comment post). `flattenCommentItems` lifts them out. A
+  reply's url is `?commentUrn=<parent>&replyUrn=<reply>`; `parent_comment_id` is read from that, and is
+  NULL when it cannot be read rather than a guessed thread. `raw_data` keeps each item, so links can be
+  re-derived without paying to scrape again.
+- **A re-scrape upserts on the comment id.** Edited text and new likes refresh in place. A comment
+  deleted on LinkedIn is kept.
+
+### 23.2 Actor & cost
+`harvestapi/linkedin-post-comments` (`apify_comments_actor_id`), input
+`{ posts, maxItems: 0, scrapeReplies: true }`. It bills per result item: $0.002 on FREE to SILVER,
+$0.0015 on GOLD+ (confirmed 2026-09-15). Replies come back nested inside their parent item, so
+`comments_returned` and `cost_usd` count top-level items only. Treat `cost_usd` as a floor until an
+invoice shows whether nested replies are billed too. The first live run (243 items carrying 66 replies)
+reported $0.49. The cost lever is skipping: a post whose stored count already covers `posts.comments`
+is not re-read unless `force` is set.
+
+### 23.3 Schema: `post_comments` (§6.9)
+`id` (LinkedIn comment id, PK), `post_id`, `parent_comment_id`, the commenter's `author_name`,
+`author_id`, `author_url`, `author_headline`, `author_type`, then `is_post_author`, `text`, `likes`,
+`replies`, `pinned`, `edited`, `commented_at`, `scraped_at`, `raw_data`. Index `(post_id, commented_at)`.
+No FK to `posts`, for the same reason as §22. Added by `CREATE TABLE IF NOT EXISTS`, so no
+`SCHEMA_VERSION` bump.
+
+### 23.4 Layers
+- `lib/pure/comments.ts` (100% coverage): `mapApifyCommentToRow`, `parentCommentId`,
+  `selectPostsToScrape` (refused / up to date / scrape), `serializeComment`.
+- `lib/db/comments.repo.ts`: `upsertComments`, `getCommentsForPost`, `countCommentsByPost`.
+- `jobs/scrape-comments.ts` `scrapeOwnPostComments({ postIds?, days?, force? })`: the owner's posts
+  from the last `COMMENTS_WINDOW_DAYS` (30) by default, or the named posts at any age, newest first.
+  Ten posts per actor run; a failed batch is logged and skipped. Returns `cost_usd`.
+- `lib/comments-query.ts` `postCommentsView(postId)`: the single implementation behind both read
+  routes, as `runPostsQuery()` is for §20.
+
+### 23.5 API & UI
+- `POST /api/comments/scrape`, body `{ postIds?, days?, force? }` (empty = recent own posts):
+  CSRF-guarded; 412 names whichever of `apify_api_token` / `own_linkedin_author_id` is missing; 400 on
+  a malformed body; 403 with `refused` for someone else's post; 502 when the job throws.
+- `GET /api/posts/[id]/comments` and `GET /api/v1/posts/{id}/comments` (§20, token-gated):
+  `{ post_id, total_on_linkedin, comments }`, oldest first, no `raw_data`; 404 for an unknown post.
+- `PostCard` shows a **Comments** section only on the owner's LinkedIn posts. The app shell provides
+  `own_linkedin_author_id` through `OwnAuthorContext`, so the grid, image groups and clusters all get
+  it. **Show comments** reads what is stored; **Fetch comments** re-scrapes that one post (`force`).
+  Replies indent under the comment they answer.
+- Settings gains the comments actor field and **Your LinkedIn author id**.
+
+### 23.6 Scheduling
+None yet. Runs are on demand from the card or the route. A launchd job would follow §21.7: a script
+that drives the real route.

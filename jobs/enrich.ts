@@ -2,6 +2,7 @@
 // TDD: mocks repo + voyage; never re-embeds unless reEmbed; remaining count correct.
 
 import { countUnembedded, getUnembedded, setEmbedding } from '@/lib/db/posts.repo'
+import { resetVectorIndex } from '@/lib/db/vector-index'
 import { buildEmbeddingText } from '@/lib/pure/embed-text'
 import { vectorToBlob } from '@/lib/pure/vector-blob'
 import { embedImage, embedTexts } from '@/lib/voyage'
@@ -60,6 +61,10 @@ export async function enrichPosts(
 
     setEmbedding(post.id, textBlob, now, imageBlob, description)
   }
+
+  // The vector index is an in-process cache of these very rows (§9.5). Without this, posts embedded
+  // during this run stay invisible to semantic search until the server restarts.
+  resetVectorIndex()
 
   return { embedded: posts.length, remaining: countUnembedded() }
 }

@@ -30,24 +30,29 @@ describe('POST /api/transcribe (§18)', () => {
     expect((await POST(req)).status).toBe(403)
   })
 
-  it('412s with the missing key when the Apify token is unset', async () => {
+  it('412s with the missing key when the AssemblyAI key is unset', async () => {
     const res = await POST(post({}))
     expect(res.status).toBe(412)
-    expect((await res.json()).needs).toContain('apify_api_token')
+    expect((await res.json()).needs).toContain('assemblyai_api_key')
+  })
+
+  it('does NOT gate on the Apify token — transcription no longer runs an actor', async () => {
+    setSettings({ apify_api_token: 'tok' })
+    expect((await POST(post({}))).status).toBe(412)
   })
 
   it('runs the transcribe job and returns its result', async () => {
-    setSettings({ apify_api_token: 'tok' })
-    mockJob.mockResolvedValue({ transcribed: 3, remaining: 5 })
+    setSettings({ assemblyai_api_key: 'ak' })
+    mockJob.mockResolvedValue({ transcribed: 3, remaining: 5, unavailable: 1 })
     const res = await POST(post({ limit: 10 }))
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ transcribed: 3, remaining: 5 })
+    expect(await res.json()).toEqual({ transcribed: 3, remaining: 5, unavailable: 1 })
     expect(mockJob).toHaveBeenCalledWith(10)
   })
 
   it('defaults the limit when none is supplied', async () => {
-    setSettings({ apify_api_token: 'tok' })
-    mockJob.mockResolvedValue({ transcribed: 0, remaining: 0 })
+    setSettings({ assemblyai_api_key: 'ak' })
+    mockJob.mockResolvedValue({ transcribed: 0, remaining: 0, unavailable: 0 })
     await POST(post({}))
     expect(mockJob).toHaveBeenCalledWith(expect.any(Number))
     expect(mockJob.mock.calls[0]![0]).toBeGreaterThan(0)

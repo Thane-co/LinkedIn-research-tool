@@ -34,6 +34,8 @@ interface PostsResponse {
 export const DEFAULT_FILTERS: Filters = {
   platforms: [], // empty = all platforms (§17.4)
   keywords: [],
+  match: 'any', // OR the keyword terms, the historical contract (§11.1)
+  semantic: false, // keyword-only by default; meaning search is opt-in (§9.5)
   authors: [],
   minLikes: 0,
   minShares: 0,
@@ -50,7 +52,11 @@ export const DEFAULT_FILTERS: Filters = {
 export function toQuery(f: Filters): string {
   const p = new URLSearchParams()
   if (f.platforms.length) p.set('platform', f.platforms.join(',')) // empty = all (§17.4)
-  if (f.keywords.length) p.set('keywords', f.keywords.join(','))
+  if (f.keywords.length) {
+    p.set('keywords', f.keywords.join(','))
+    if (f.match !== 'any') p.set('match', f.match)
+    if (f.semantic) p.set('semantic', 'true')
+  }
   if (f.authors.length) p.set('authors', f.authors.join(','))
   if (f.minLikes) p.set('minLikes', String(f.minLikes))
   if (f.minShares) p.set('minShares', String(f.minShares))

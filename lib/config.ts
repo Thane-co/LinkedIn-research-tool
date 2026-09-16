@@ -66,6 +66,15 @@ export const POST_SCRAPE_COST_PER_POST = 0.002
 // window is 'week' and the day-N comparison is done in SQL over post_snapshots instead.
 export const ENGAGEMENT_REFRESH_TIMEFRAME = 'week' as const
 
+// --- Comments on her own posts (PRD §23) ------------------------------------
+// harvestapi/linkedin-post-comments bills per result item: $0.002 FREE–SILVER, $0.0015 GOLD+.
+// Confirmed against the actor's live pricing, 2026-09-15. Replies arrive nested inside their parent
+// item, so a cost computed from top-level items is a floor if nested replies are billed as well.
+export const COMMENT_SCRAPE_COST_PER_COMMENT = 0.002
+// A run with no post ids covers her posts from the last 30 days; an explicit post id is honoured at
+// any age.
+export const COMMENTS_WINDOW_DAYS = 30
+
 // --- Settings defaults (PRD §6.4) ------------------------------------------
 // Secret keys start empty; only non-secret config is seeded with defaults.
 export const SETTINGS_DEFAULTS = {
@@ -75,6 +84,10 @@ export const SETTINGS_DEFAULTS = {
   apify_tweet_actor_id: 'apidojo/tweet-scraper', // ONE actor for both tweet search & profile modes
   apify_substack_actor_id: 'brilliant_gum/substack-insights-scraper', // ONE actor for both Substack modes (§17)
   apify_instagram_actor_id: 'apify/instagram-post-scraper', // profile/creator posts (photo+video+carousel) (§18)
+  apify_comments_actor_id: 'harvestapi/linkedin-post-comments', // comments + replies on HER posts only (§23)
+  // §23: the LinkedIn slug whose posts get their comments scraped. Empty until set, so comment
+  // scraping is refused rather than guessing whose posts count as "own".
+  own_linkedin_author_id: '',
   default_market: 'ai',
 } as const
 

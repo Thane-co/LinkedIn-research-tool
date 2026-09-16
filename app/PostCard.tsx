@@ -2,10 +2,13 @@
 // Layer 5 — PostCard (PRD §12 step 27): author + date, a link to the original post, platform badge;
 // content (truncate/expand); optional image; footer with engagement (👍/💬/🔁) and — on the right —
 // the scrape-source badge + x-factor badge (>=2x green 🔥, 0.5-2x gray, <0.5x red) + group size.
+// §23: on her OWN LinkedIn posts (author_id === the own author id) the card also carries the comments.
 
-import { useState } from 'react'
+import { useContext, useState } from 'react'
+import { OwnAuthorContext } from '@/app/OwnAuthor'
+import { PostComments } from '@/app/PostComments'
 import { xFactorBadge } from '@/lib/pure/badge'
-import { mediaProxySrc, safeHref } from '@/lib/pure/url'
+import { isExpiredMediaUrl, mediaProxySrc, safeHref } from '@/lib/pure/url'
 import type { PostMedia } from '@/lib/types'
 
 export interface PostCardPost {
@@ -26,29 +29,63 @@ export interface PostCardPost {
   transcript?: string | null // §18: speech-to-text of a video post, shown under the caption
 }
 
+/**
+ * One post image, degrading to a placeholder rather than a broken-image icon (§10.3.2).
+ *
+ * Two ways an image dies, handled differently:
+ *  • PREDICTABLE — the url is signed and its expiry has passed, so it is a permanent 403. Skipped
+ *    without rendering an <img> at all, which also spares a doomed round trip through /api/media.
+ *    Most of this corpus is in that state.
+ *  • UNPREDICTABLE — an unsigned url that has since died, a deleted local file, a dead host. Nothing
+ *    to read offline, so it is attempted and `onError` catches the failure.
+ *
+ * The placeholder is deliberately not "render nothing": for content research, whether a post carried
+ * an image is itself a finding, and silently dropping it would make an image post read as text-only.
+ */
+function PostImage({ src, alt, className }: { src: string | null | undefined; alt: string; className: string }) {
+  const [failed, setFailed] = useState(false)
+  const proxied = mediaProxySrc(src)
+  if (!proxied) return null
+  if (failed || isExpiredMediaUrl(src)) {
+    return (
+      <span
+        className={`${className} post-card__image--unavailable`}
+        role="img"
+        aria-label="image no longer available"
+        title="the platform's signed link for this image has expired"
+      >
+        🖼
+      </span>
+    )
+  }
+  return (
+    <img className={className} src={proxied} alt={alt} onError={() => setFailed(true)} />
+  )
+}
+
 /* eslint-disable @next/next/no-img-element */
 /** Render the post's media by type (§10.3.1); falls back to a single image_url image. */
 function PostMediaView({ post }: { post: PostCardPost }) {
   const m = post.media
   if (m?.type === 'image') {
     if (m.images.length <= 1) {
-      const src = mediaProxySrc(m.images[0])
-      return src ? <img className="post-card__image" src={src} alt="post media" /> : null
+      return <PostImage className="post-card__image" src={m.images[0]} alt="post media" />
     }
     return (
       <div className="post-card__carousel" data-testid="carousel">
-        {m.images.map((src, i) => {
-          const proxied = mediaProxySrc(src)
-          return proxied ? (
-            <img key={i} className="post-card__image post-card__carousel-item" src={proxied} alt="post media" />
-          ) : null
-        })}
+        {m.images.map((src, i) => (
+          <PostImage
+            key={i}
+            className="post-card__image post-card__carousel-item"
+            src={src}
+            alt="post media"
+          />
+        ))}
         <span className="post-card__media-count">{m.images.length} images</span>
       </div>
     )
   }
   if (m?.type === 'video') {
-    const poster = mediaProxySrc(m.poster)
     return (
       <a
         className="post-card__media-link post-card__video"
@@ -58,7 +95,7 @@ function PostMediaView({ post }: { post: PostCardPost }) {
         rel="noopener noreferrer"
         aria-label="play the video (opens the post)"
       >
-        {poster && <img className="post-card__image" src={poster} alt="video thumbnail" />}
+        <PostImage className="post-card__image" src={m.poster} alt="video thumbnail" />
         <span className="post-card__play" aria-hidden="true">
           ▶
         </span>
@@ -66,7 +103,6 @@ function PostMediaView({ post }: { post: PostCardPost }) {
     )
   }
   if (m?.type === 'document') {
-    const cover = mediaProxySrc(m.cover)
     return (
       <a
         className="post-card__media-link post-card__document"
@@ -75,14 +111,13 @@ function PostMediaView({ post }: { post: PostCardPost }) {
         target="_blank"
         rel="noopener noreferrer"
       >
-        {cover && <img className="post-card__image" src={cover} alt={m.title ?? 'document'} />}
+        <PostImage className="post-card__image" src={m.cover} alt={m.title ?? 'document'} />
         <span className="badge post-card__doc-badge">📄 {m.pages ?? '?'} pages</span>
       </a>
     )
   }
   // fallback: a legacy/thumbnail-only post
-  const fallback = mediaProxySrc(post.image_url)
-  return fallback ? <img className="post-card__image" src={fallback} alt="post media" /> : null
+  return <PostImage className="post-card__image" src={post.image_url} alt="post media" />
 }
 /* eslint-enable @next/next/no-img-element */
 
@@ -97,7 +132,10 @@ function formatDate(iso: string | null | undefined): string {
   return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`
 }
 
-export function PostCard({ post }: { post: PostCardPost }) {
+export function PostCard({ post, ownAuthorId }: { post: PostCardPost; ownAuthorId?: string | null }) {
+  // An explicit prop wins; otherwise the app shell's setting (§23). Neither = no comments anywhere.
+  const contextOwnAuthor = useContext(OwnAuthorContext)
+  const ownAuthor = ownAuthorId ?? contextOwnAuthor
   const [expanded, setExpanded] = useState(false)
   const [transcriptExpanded, setTranscriptExpanded] = useState(false)
   const content = post.content ?? ''
@@ -109,6 +147,7 @@ export function PostCard({ post }: { post: PostCardPost }) {
   const transcriptShown = transcriptLong && !transcriptExpanded ? `${transcript.slice(0, TRUNCATE_AT)}…` : transcript
 
   const badge = xFactorBadge(post.x_factor)
+  const isOwnPost = post.platform === 'linkedin' && Boolean(ownAuthor) && post.author_id === ownAuthor
 
   return (
     <article className="post-card">
@@ -158,6 +197,8 @@ export function PostCard({ post }: { post: PostCardPost }) {
           )}
         </section>
       )}
+
+      {isOwnPost && <PostComments postId={post.id} />}
 
       <footer className="post-card__stats">
         <span className="stat" title="likes">

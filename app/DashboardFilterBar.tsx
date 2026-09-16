@@ -6,12 +6,16 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { derivePersonaKey } from '@/lib/pure/persona'
-import type { Platform, Timeframe } from '@/lib/types'
+import type { MatchMode, Platform, SortMode, Timeframe } from '@/lib/types'
 
 export interface Filters {
   // §17.4: a subset of platforms; empty = all. Serializes to `platform=<comma list>`.
   platforms: Platform[]
   keywords: string[]
+  // §11.1: how the keyword terms combine in the full-text query — 'any' OR's, 'all' AND's.
+  match: MatchMode
+  // §9.5: also retrieve by meaning (embed the query, union the vector hits with the keyword hits).
+  semantic: boolean
   authors: string[]
   minLikes: number
   minShares: number
@@ -20,7 +24,7 @@ export interface Filters {
   dateFrom?: string
   dateTo?: string
   market?: string // '' / undefined = all markets; options land with the Layer 6 markets store
-  sort: 'recent' | 'likes' | 'xfactor'
+  sort: SortMode
   groupByImage: boolean
   discoverTrends: boolean
   imageThreshold: number
@@ -277,6 +281,29 @@ export function DashboardFilterBar({
             }}
           />
         </label>
+        {filters.keywords.length > 0 && (
+          <label className="filter-bar__toggle" title="also find posts that mean the same thing, without the exact words">
+            <input
+              type="checkbox"
+              checked={filters.semantic}
+              onChange={(e) => set({ semantic: e.target.checked })}
+            />
+            Meaning
+          </label>
+        )}
+        {filters.keywords.length > 0 && (
+          <label className="filter-bar__field" title="how the keyword terms combine">
+            Match
+            <select
+              aria-label="Match"
+              value={filters.match}
+              onChange={(e) => set({ match: e.target.value as MatchMode })}
+            >
+              <option value="any">Any word</option>
+              <option value="all">All words</option>
+            </select>
+          </label>
+        )}
       </div>
 
       <details
@@ -358,10 +385,15 @@ export function DashboardFilterBar({
 
       <label className="filter-bar__field">
         Sort
-        <select value={filters.sort} onChange={(e) => set({ sort: e.target.value as Filters['sort'] })}>
+        <select
+          aria-label="Sort"
+          value={filters.sort}
+          onChange={(e) => set({ sort: e.target.value as Filters['sort'] })}
+        >
           <option value="recent">Newest</option>
           <option value="likes">Most liked</option>
           <option value="xfactor">Highest x-factor</option>
+          <option value="relevance">Best match</option>
         </select>
       </label>
 

@@ -45,3 +45,6 @@ snapshot.db-shm
 
 # Agent server build output (separate from .next so `next dev` cannot clobber it)
 .next-agent
+
+# Classification experiments and their scraped review corpus live in research-tool-data (private)
+/classify-*

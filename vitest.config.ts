@@ -11,6 +11,7 @@ const PURE_MODULES = [
   'lib/pure/image-groups.ts',
   'lib/pure/content-clusters.ts',
   'lib/pure/vector-blob.ts',
+  'lib/pure/comments.ts', // §23: a wrong post or parent link files a comment under the wrong thread
 ]
 
 const pureThresholds = Object.fromEntries(

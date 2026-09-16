@@ -59,10 +59,22 @@ const src = new Database(srcPath, { readonly: true, fileMustExist: true })
 const out = new Database(outPath)
 
 // 1. Recreate the schema exactly as it exists in the source (tables first, then indexes).
+//    TRIGGERS are deliberately created LATER (step 3): the posts_fts sync triggers would otherwise
+//    fire once per row during the bulk copy. Creating them after, then rebuilding the index in one
+//    pass, is the same end state and far faster.
 const objects = src
   .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'")
   .all()
-const wanted = (name) => !SKIP_TABLES.has(name)
+// A virtual table (posts_fts, §6.1.1) OWNS its `<name>_data` / `_idx` / `_docsize` / `_config`
+// shadow tables: creating the virtual table creates them, and creating one directly is refused with
+// "object name reserved for internal use". They appear in sqlite_master as ordinary tables, so they
+// have to be recognised and skipped rather than replayed.
+const virtualTables = objects
+  .filter((o) => o.type === 'table' && /^CREATE VIRTUAL TABLE/i.test(o.sql))
+  .map((o) => o.name)
+const isShadowTable = (name) => virtualTables.some((vt) => name.startsWith(`${vt}_`))
+
+const wanted = (name) => !SKIP_TABLES.has(name) && !isShadowTable(name)
 for (const kind of ['table', 'index']) {
   for (const o of objects) {
     if (o.type !== kind) continue
@@ -97,11 +109,28 @@ const copy = out.transaction(() => {
 copy()
 out.exec('DETACH DATABASE src')
 
-// 3. The one setting the snapshot carries: its own read-only token.
+// 3. Now the triggers, and the search index they maintain (§6.1.1). Without this the snapshot ships
+//    a posts_fts that is present but EMPTY — every keyword search on it would return zero results
+//    and look like an honest empty answer. The version stamp marks the index as already built so the
+//    API server doesn't rebuild it again on first open.
+for (const o of objects) {
+  if (o.type !== 'trigger' || SKIP_TABLES.has(o.tbl_name ?? '')) continue
+  try {
+    out.exec(o.sql)
+  } catch (err) {
+    if (!/already exists/i.test(err.message)) throw err
+  }
+}
+if (out.prepare("SELECT name FROM sqlite_master WHERE name='posts_fts'").get()) {
+  out.exec("INSERT INTO posts_fts(posts_fts) VALUES('rebuild')")
+  out.pragma(`user_version = ${src.pragma('user_version', { simple: true })}`)
+}
+
+// 4. The one setting the snapshot carries: its own read-only token.
 const token = providedToken ?? randomBytes(32).toString('hex')
 out.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('readonly_api_token', token)
 
-// 4. Compact, then verify nothing sensitive rode along.
+// 5. Compact, then verify nothing sensitive rode along — and that search actually works.
 out.exec('VACUUM')
 const leaked = out
   .prepare("SELECT key FROM settings WHERE key <> 'readonly_api_token'")
@@ -116,6 +145,17 @@ if (rawLeft > 0) {
   console.error(`REFUSING TO SHIP: ${rawLeft} posts still carry raw_data.`)
   process.exit(1)
 }
+// A search index that is empty or half-built answers every keyword query with zero rows and NO
+// error — an honest-looking empty answer. FTS5's own integrity-check verifies the index against the
+// content table row for row and throws if they disagree, which a sentinel-word query cannot do.
+if (counts.posts > 0) {
+  try {
+    out.exec("INSERT INTO posts_fts(posts_fts) VALUES('integrity-check')")
+  } catch (err) {
+    console.error(`REFUSING TO SHIP: posts_fts does not match the copied posts (${err.message}).`)
+    process.exit(1)
+  }
+}
 out.close()
 src.close()
 
@@ -123,6 +163,7 @@ const size = statSync(outPath).size
 console.log(`Snapshot written to ${outPath} (${mb(size)}), down from ${mb(statSync(srcPath).size)}.\n`)
 for (const [table, n] of Object.entries(counts)) console.log(`  ${table.padEnd(10)} ${n.toLocaleString()} rows`)
 console.log('\n  raw_data      stripped')
+console.log('  posts_fts     rebuilt')
 console.log('  API keys      NOT included (settings holds only the remote token)')
 console.log(`\nRemote read-only token (separate from your local one):\n\n  ${token}\n`)
 console.log('Copy it to the VPS and run the API there:\n')

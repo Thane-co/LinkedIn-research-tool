@@ -11,8 +11,8 @@ A **single-user, fully-local** desktop research tool for finding viral social po
 LinkedIn + Twitter/X (by keyword and/or creator) via Apify, stores everything in local **SQLite**,
 enriches posts with **embeddings** + an **x-factor** score, and shows them in a filterable UI
 (x-factor, platform, time horizon, engagement, keyword, creator) with on-demand **image grouping**
-and **content clustering**. No Vercel, no Supabase. Only external calls: Apify + Voyage (+ optional
-Anthropic), all with the **user's own** keys.
+and **content clustering**. No Vercel, no Supabase. Only external calls: Apify + Voyage + AssemblyAI
+(+ optional Anthropic), all with the **user's own** keys.
 
 ## Source of truth
 - **`docs/prd-research-tool.md` is the source of truth** for schema, algorithms, thresholds, and
@@ -47,7 +47,8 @@ Wire these into `package.json` when scaffolding if the names differ. Work **bott
 - **No secrets in code.** API keys are bring-your-own, read from the `settings` table via
   `getSettings()` — never from `process.env`, never hardcoded, **never logged**.
 - **Local-only.** Never reintroduce Supabase, Postgres, Vercel, pgvector, or cron. SQLite only;
-  vectors stored as Float32 **BLOBs**; cosine similarity computed **in JS** on the ≤400 candidate set.
+  vectors stored as Float32 **BLOBs**; cosine similarity computed **in JS** — on the ≤400 candidate
+  set for clustering (§9.1–9.4), and by full scan of the cached index for retrieval (§9.5).
 - **TypeScript strict, no `any`.**
 - **No silent failures.** Catch and log meaningful info (posts scraped, new vs duplicate, groups
   found). Non-fatal jobs (enrich, x-factor recompute) log errors but never abort the scrape.
@@ -76,12 +77,49 @@ the same change.**
 - **Derive a post's `id` from the canonical URL's activity URN, NOT `raw.id`** — `raw.id` can be a
   feed-event URN. Regex: `(?:activity|ugcPost|share)[-:](\d+)`.
 - **Tweet ids are prefixed `tweet-`** to avoid collision with LinkedIn ids.
+- **Instagram video transcripts come from AssemblyAI, never Apify** (§18.1). Its input is the post's
+  stored `media.url`, and Instagram signs those urls so they expire in days — which is why the job
+  runs as a follow-on right after the scrape. An expired url leaves `transcript` **NULL** (re-scrape
+  it); only a clip that genuinely had no speech is stored as `''` (never re-attempted). Collapsing
+  those two states drops the post from the queue forever.
+- **Comments are scraped for the owner's own posts ONLY** (§23). A post qualifies only when its
+  stored `author_id` equals the `own_linkedin_author_id` setting. The job refuses any other post, and
+  any post id it has never stored, before the actor is called, and drops a returned comment whose post
+  was not requested. Never widen this to creator or keyword posts.
 - **Twitter uses ONE actor (`apidojo/tweet-scraper`) for both modes** — keyword passes
   `searchTerms`, creator passes `twitterHandles`; only the input shape differs.
+- **The Twitter likes floor (`minimumFavorites`) applies to KEYWORD runs only** (§11.8). X filters on
+  it before Apify bills, so it makes a keyword run cheaper AND sharper — but on a creator run it would
+  hide that creator's weak posts, inflating the x-factor baseline (the mean of their own prior posts)
+  and corrupting every score.
+- **Per-platform scrape settings live in ONE `scrape_prefs` settings row** as JSON keyed by platform
+  (§11.8). `parseScrapePrefs` is the only place that shape is defined; it never throws and never
+  leaves a platform undefined. Instagram can never have `keywords: true` — its actor is profile-only.
+- **Keyword search goes through `posts_fts` (FTS5), never `content LIKE`** (§6.1.1). The tokenizer
+  `porter unicode61` is load-bearing: changing it (or the indexed columns) invalidates the index, so
+  bump `SCHEMA_VERSION` in `db.ts` in the same change or searches silently go stale. User terms are
+  **always quoted** by `lib/pure/fts-query.ts` — FTS5 operator syntax a user typed is searched for,
+  never executed. A keyword with no indexable token matches **nothing**, never everything.
 - **Clustering constants:** image similarity `0.80` · content `0.65` · content floor `0.60` ·
   text/image weight `0.75/0.25` · min group size `2` · candidate cap `400`.
 - **Embeddings:** text `voyage-3`, image `voyage-multimodal-3`, both **1024-dim**, batch **100**;
-  **never re-embed** a post that already has an embedding unless `reEmbed` is set.
+  **never re-embed** a post that already has an embedding unless `reEmbed` is set. `input_type` is
+  left **UNSET** everywhere (stored vectors and query vectors alike). Query and document vectors must
+  come from the SAME model and input_type or cosine between them is noise — so changing the model
+  means re-embedding all ~89k posts, never just the new ones.
+- **Image embedding SENDS THE BYTES, never the url** (§7.3). Voyage's server-side fetcher is blocked
+  by LinkedIn's CDN — it returns 400 "the image URL you have provided is invalid" even for urls that
+  are signed, unexpired, and serve a 200 to us. `embedImage` therefore downloads the image itself
+  (http(s) only, content-type checked, ≤`MAX_IMAGE_BYTES`) and posts `image_base64`. Reverting to
+  `image_url` silently embeds nothing from LinkedIn.
+- **LinkedIn image urls expire.** They carry `?e=<unix-seconds>&t=<sig>`; past that they are a
+  permanent 403 and only a re-scrape mints a new one. Embed images at scrape time — a backfill run
+  months later recovers nothing.
+- **Semantic retrieval is an enhancement, never a dependency** (§9.5). A missing Voyage key or a
+  failed embed call returns keyword results plus a `warnings` entry — never a 5xx. Hard filters
+  (platform/engagement/x-factor/timeframe) shape the candidate pool BEFORE either retriever ranks,
+  never after. `resetVectorIndex()` after any embedding write, or new posts stay unsearchable until
+  the process restarts.
 - **`/api/v1` is GET-only, forever** (§20). Every v1 route module exports **only** `GET`; a test
   asserts no mutating export exists. Never serialize `embedding`, `image_embedding`, or `raw_data`.
 - **`/api/posts` and `/api/v1/posts` share `runPostsQuery()`** (`lib/posts-query.ts`) — one filter
@@ -94,7 +132,8 @@ the same change.**
 ## Coverage
 - ≥ **80%** lines/functions/branches globally.
 - **100%** on the pure modules: `x-factor.ts`, `dedup.ts`, `mappers.ts`, `similarity.ts`,
-  `image-groups.ts`, `content-clusters.ts`, `vector-blob.ts`. A silent failure in these corrupts data.
+  `image-groups.ts`, `content-clusters.ts`, `vector-blob.ts`, `vector-search.ts`, `fts-query.ts`.
+  A silent failure in these corrupts data.
 
 ---
 

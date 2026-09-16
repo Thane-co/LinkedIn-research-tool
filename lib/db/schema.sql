@@ -222,3 +222,37 @@ CREATE TABLE IF NOT EXISTS post_snapshots (
   PRIMARY KEY (post_id, captured_on)
 );
 CREATE INDEX IF NOT EXISTS post_snapshots_day_idx ON post_snapshots(captured_on DESC);
+
+-- 6.9 post_comments — comments and replies on HER OWN posts (§23) -----------
+-- One row per comment, keyed by LinkedIn's comment id and attached to its post by post_id. A reply
+-- carries the id of the comment it answers in parent_comment_id (NULL for a top-level comment).
+--
+-- INVARIANT — only posts whose author_id equals the own_linkedin_author_id setting ever get rows here.
+-- The job refuses any other post BEFORE calling the actor; nothing in this table could tell whose post
+-- a comment sits on after the fact.
+--
+-- A re-scrape UPSERTS on id, so edited text and new likes refresh in place. A comment deleted on
+-- LinkedIn is kept: it was said, and the post's live comment count simply stops matching.
+--
+-- No FK to posts, for the same reason as post_snapshots: storage must never block, and an orphan row
+-- simply never joins.
+CREATE TABLE IF NOT EXISTS post_comments (
+  id                TEXT PRIMARY KEY,           -- LinkedIn comment id
+  post_id           TEXT NOT NULL,              -- posts.id (the activity id)
+  parent_comment_id TEXT,                       -- the comment this replies to; NULL when top-level
+  author_name       TEXT,
+  author_id         TEXT,                       -- clean slug (universalName / publicIdentifier)
+  author_url        TEXT,
+  author_headline   TEXT,                       -- the commenter's headline at scrape time
+  author_type       TEXT,                       -- 'profile' | 'company'
+  is_post_author    INTEGER NOT NULL DEFAULT 0, -- 1 = written by the post's author (her own replies)
+  text              TEXT,
+  likes             INTEGER NOT NULL DEFAULT 0,
+  replies           INTEGER NOT NULL DEFAULT 0,
+  pinned            INTEGER NOT NULL DEFAULT 0,
+  edited            INTEGER NOT NULL DEFAULT 0,
+  commented_at      TEXT,                       -- ISO-8601 UTC
+  scraped_at        TEXT NOT NULL,              -- ISO-8601 UTC of the latest scrape that returned it
+  raw_data          TEXT                        -- JSON.stringify of the full Apify item
+);
+CREATE INDEX IF NOT EXISTS post_comments_post_idx ON post_comments(post_id, commented_at);

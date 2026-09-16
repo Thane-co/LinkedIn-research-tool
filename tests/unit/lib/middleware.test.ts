@@ -19,7 +19,7 @@ describe('read-only server mode (§20.4)', () => {
   it('refuses every write method when enabled, whatever the path', async () => {
     process.env.READONLY_SERVER = '1'
     for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
-      for (const path of ['/api/scrape', '/api/transcribe', '/api/settings', '/api/ig-compare/discover', '/api/creators']) {
+      for (const path of ['/api/scrape', '/api/transcribe', '/api/settings', '/api/creators/backfill-personas', '/api/creators']) {
         const res = call(method, path)
         expect(res.status, `${method} ${path}`).toBe(403)
       }

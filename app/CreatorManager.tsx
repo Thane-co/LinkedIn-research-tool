@@ -1,21 +1,17 @@
 'use client'
-// Layer 5 — CreatorManager (PRD §12 step 29, wireframe §11.5 Screen B): a single creator list —
-// every creator is part of the scrape set (tier 'core' under the hood). Add (single or bulk import),
-// Remove. No watch/demote UI (no scheduler, so the tracked-vs-scraped split added nothing).
+// Layer 5 — CreatorManager (PRD §11.8, §12 step 29): the creator set as a PERSON x PLATFORM table.
+// Accounts are stored one row each, but read one row per person (grouped by `persona`, §17.2), so
+// "how many of these people do we follow on X?" is answerable at a glance and every empty cell is a
+// visible gap with an add button on it. Add (single or bulk import), Remove, and a one-shot
+// "Link accounts by name" that backfills personas from display names.
+// Every creator here IS the scrape set; there is no tier/watch split and no demote UI.
 
 import { useEffect, useState, type ChangeEvent } from 'react'
 import { parseCreatorCsv } from '@/lib/pure/csv'
+import { derivePersonaKey } from '@/lib/pure/persona'
+import { countByPlatform, groupCreatorsByPerson, shortAccountLabel, TABLE_PLATFORMS } from '@/lib/pure/creator-table'
 import { apiFetch } from '@/lib/api-client'
-
-interface Creator {
-  id: string
-  platform: 'linkedin' | 'twitter' | 'substack' | 'instagram'
-  profile_url: string
-  author_id: string | null
-  display_name: string | null
-  persona: string | null // §17.2 the person this account belongs to
-  tags: string // JSON array
-}
+import type { CreatorRow, Platform } from '@/lib/types'
 
 /** Read a File as text via FileReader (works in every browser and under jsdom, unlike File.text()). */
 const readFileText = (file: File): Promise<string> =>
@@ -36,19 +32,20 @@ const parseTagChips = (json: string): string[] => {
 }
 
 export function CreatorManager() {
-  const [creators, setCreators] = useState<Creator[]>([])
+  const [creators, setCreators] = useState<CreatorRow[]>([])
   const [url, setUrl] = useState('')
   const [tags, setTags] = useState('')
   const [person, setPerson] = useState('')
   const [bulk, setBulk] = useState('')
   const [showBulk, setShowBulk] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [linked, setLinked] = useState<number | null>(null)
 
   const fail = (e: unknown): void => setError(e instanceof Error ? e.message : 'Something went wrong')
 
   async function load(): Promise<void> {
     try {
-      const body = await apiFetch<{ creators: Creator[] }>('/api/creators')
+      const body = await apiFetch<{ creators: CreatorRow[] }>('/api/creators')
       setCreators(body.creators)
       setError(null)
     } catch (e) {
@@ -111,6 +108,27 @@ export function CreatorManager() {
     await importInputs(parseCreatorCsv(await readFileText(file)))
   }
 
+  /** One-shot: derive persona from display_name wherever it's unset, so rows group by person. */
+  async function linkByName(): Promise<void> {
+    try {
+      const body = await apiFetch<{ updated: number; creators: CreatorRow[] }>('/api/creators/backfill-personas', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      })
+      setCreators(body.creators)
+      setLinked(body.updated)
+      setError(null)
+    } catch (e) {
+      fail(e)
+    }
+  }
+
+  /** Clicking an empty cell prefills the Person field so the new account joins that person's row. */
+  function startAdd(personKey: string): void {
+    setPerson(personKey)
+    setUrl('')
+  }
+
   async function remove(id: string): Promise<void> {
     try {
       await apiFetch(`/api/creators?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
@@ -120,13 +138,27 @@ export function CreatorManager() {
     }
   }
 
-  const nameOf = (c: Creator): string => c.display_name ?? c.author_id ?? c.profile_url
+  const nameOf = (c: CreatorRow): string => c.display_name ?? c.author_id ?? c.profile_url
+
+  const people = groupCreatorsByPerson(creators)
+  const counts = countByPlatform(creators)
+  const PLATFORM_LABELS: Record<Platform, string> = {
+    linkedin: 'LinkedIn',
+    twitter: 'X',
+    substack: 'Substack',
+    instagram: 'Instagram',
+  }
 
   return (
     <details className="creators" open>
       <summary className="creators__summary">
         <h2>Creators</h2>
-        <span className="creators__count">{creators.length} tracked</span>
+        <span className="creators__count">
+          {people.length} people · {creators.length} accounts
+        </span>
+        <span className="creators__platform-counts">
+          {TABLE_PLATFORMS.map((p) => `${counts[p]} ${PLATFORM_LABELS[p]}`).join(' · ')}
+        </span>
       </summary>
 
       <div className="creators__body">
@@ -138,6 +170,10 @@ export function CreatorManager() {
           <button type="button" onClick={() => setShowBulk((s) => !s)}>
             Bulk import
           </button>
+          <button type="button" onClick={() => void linkByName()} title="Group accounts that share a display name onto one person">
+            Link accounts by name
+          </button>
+          {linked !== null && <span className="creators__linked" role="status">{`Linked ${linked} account(s)`}</span>}
         </div>
 
         {error && (
@@ -180,26 +216,64 @@ export function CreatorManager() {
           </button>
         </div>
 
-        <ul className="creators__list">
-          {creators.map((c) => (
-            <li key={c.id} className="creators__row">
-              <span className="creators__name">{nameOf(c)}</span>
-              <span className={`badge badge--platform badge--${c.platform}`}>{c.platform}</span>
-              <span className="creators__slug">{c.profile_url}</span>
-              <span className="creators__tags">
-                {c.persona && <span className="chip chip--person" title="person (links accounts across platforms)">👤 {c.persona}</span>}
-                {parseTagChips(c.tags).map((t) => (
-                  <span key={t} className="chip chip--tag">
-                    {t}
-                  </span>
+        <table className="creators__table">
+          <thead>
+            <tr>
+              <th scope="col">Person</th>
+              {TABLE_PLATFORMS.map((p) => (
+                <th key={p} scope="col">
+                  {PLATFORM_LABELS[p]}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {people.map((row) => (
+              <tr key={row.key} className="creators__person-row">
+                <th scope="row" className="creators__name">
+                  <span className="creators__person-label">{row.label}</span>
+                  {/* the persona key is what actually groups the row — surface it only when it adds
+                      information, i.e. it is not simply the label normalized */}
+                  {derivePersonaKey(row.label) !== row.key && !row.key.startsWith('id:') && (
+                    <span className="chip chip--person" title="person key (links accounts across platforms)">
+                      {row.key}
+                    </span>
+                  )}
+                </th>
+                {TABLE_PLATFORMS.map((platform) => (
+                  <td key={platform} className="creators__cell" data-platform={platform}>
+                    {row.accounts[platform].length === 0 ? (
+                      <button
+                        type="button"
+                        className="creators__add-cell"
+                        aria-label={`add ${PLATFORM_LABELS[platform]} for ${row.label}`}
+                        onClick={() => startAdd(row.key)}
+                      >
+                        + add
+                      </button>
+                    ) : (
+                      row.accounts[platform].map((c) => (
+                        <span key={c.id} className="creators__account">
+                          <span className="creators__slug" title={c.profile_url}>
+                            {shortAccountLabel(c)}
+                          </span>
+                          {parseTagChips(c.tags).map((t) => (
+                            <span key={t} className="chip chip--tag">
+                              {t}
+                            </span>
+                          ))}
+                          <button type="button" aria-label={`remove ${nameOf(c)}`} onClick={() => remove(c.id)}>
+                            Remove
+                          </button>
+                        </span>
+                      ))
+                    )}
+                  </td>
                 ))}
-              </span>
-              <button type="button" aria-label={`remove ${nameOf(c)}`} onClick={() => remove(c.id)}>
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </details>
   )

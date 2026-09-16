@@ -20,12 +20,12 @@ const indexNames = (db: Database.Database): string[] =>
   }[]).map((r) => r.name)
 
 describe('migrate', () => {
-  it('creates all eight content tables', () => {
+  it('creates all nine content tables', () => {
     const db = new Database(':memory:')
     migrate(db)
     expect(contentTableNames(db)).toEqual([
-      'creators', 'follower_snapshots', 'keywords', 'post_snapshots', 'posts', 'profiles',
-      'scrape_jobs', 'settings',
+      'creators', 'follower_snapshots', 'keywords', 'post_comments', 'post_snapshots', 'posts',
+      'profiles', 'scrape_jobs', 'settings',
     ])
   })
 
@@ -65,8 +65,8 @@ describe('migrate', () => {
     migrate(db)
     expect(() => migrate(db)).not.toThrow()
     expect(contentTableNames(db)).toEqual([
-      'creators', 'follower_snapshots', 'keywords', 'post_snapshots', 'posts', 'profiles',
-      'scrape_jobs', 'settings',
+      'creators', 'follower_snapshots', 'keywords', 'post_comments', 'post_snapshots', 'posts',
+      'profiles', 'scrape_jobs', 'settings',
     ])
   })
 

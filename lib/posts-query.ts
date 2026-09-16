@@ -3,21 +3,35 @@
 // dashboard route and the read-only agent API answer with the SAME filters and the SAME shape —
 // one implementation, no drift.
 
-import { IMAGE_SIMILARITY_THRESHOLD, CONTENT_SIMILARITY_THRESHOLD } from '@/lib/config'
+import {
+  IMAGE_SIMILARITY_THRESHOLD,
+  CONTENT_SIMILARITY_THRESHOLD,
+  RETRIEVAL_CANDIDATES,
+  RRF_K,
+} from '@/lib/config'
 import {
   getAvailableAuthors,
   getCandidatesForClustering,
+  getFilteredPostIds,
+  getPostsByIds,
+  searchFtsRankedIds,
   searchPosts,
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
   type AvailableAuthor,
   type ClusteringCandidate,
   type PostFilters,
 } from '@/lib/db/posts.repo'
+import { searchSimilar } from '@/lib/db/vector-index'
 import { findContentClusters } from '@/lib/pure/content-clusters'
+import { reciprocalRankFusion } from '@/lib/pure/vector-search'
+import { embedTexts } from '@/lib/voyage'
 import { findSimilarImageGroups } from '@/lib/pure/image-groups'
 import { isPostMedia } from '@/lib/pure/media'
 import type {
   ContentCluster,
   ImageGroup,
+  MatchMode,
   Platform,
   PostMedia,
   PostRow,
@@ -27,7 +41,8 @@ import type {
 
 export const VALID_PLATFORMS: readonly Platform[] = ['linkedin', 'twitter', 'substack', 'instagram']
 export const TIMEFRAMES: readonly Timeframe[] = ['all', '24h', '3d', 'week', 'month', '3months', 'custom']
-export const SORTS: readonly SortMode[] = ['recent', 'likes', 'xfactor']
+export const SORTS: readonly SortMode[] = ['recent', 'likes', 'xfactor', 'relevance']
+export const MATCH_MODES: readonly MatchMode[] = ['any', 'all']
 
 /** A post as it goes over the wire: vectors and the raw scraped payload are dropped, `media` parsed. */
 export type SerializedPost = Omit<PostRow, 'embedding' | 'image_embedding' | 'raw_data' | 'media'> & {
@@ -83,6 +98,7 @@ export function parsePostFilters(sp: URLSearchParams): PostFilters {
   return {
     platforms: parsePlatforms(sp.get('platform')),
     keywords: keywords.length > 0 ? keywords : undefined,
+    match: oneOf(MATCH_MODES, sp.get('match')),
     authors: list('authors').length > 0 ? list('authors') : undefined,
     minLikes: num('minLikes'),
     minShares: num('minShares'),
@@ -122,6 +138,7 @@ export function collectFilterWarnings(sp: URLSearchParams): string[] {
   }
   enumParam('timeframe', TIMEFRAMES)
   enumParam('sort', SORTS)
+  enumParam('match', MATCH_MODES)
 
   const platformRaw = sp.get('platform')
   if (platformRaw) {
@@ -139,6 +156,10 @@ export function collectFilterWarnings(sp: URLSearchParams): string[] {
     if (raw !== null && raw !== '' && !Number.isFinite(Number(raw))) {
       warnings.push(`Ignored non-numeric ${key}='${raw}'.`)
     }
+  }
+
+  if (sp.get('semantic') === 'true' && !sp.get('q') && !sp.get('keywords')) {
+    warnings.push('Ignored semantic=true: it needs a `q`/`keywords` query to embed.')
   }
 
   if (sp.get('timeframe') && sp.get('timeframe') !== 'custom' && (sp.get('dateFrom') || sp.get('dateTo'))) {
@@ -170,16 +191,112 @@ function serializeCandidate(c: ClusteringCandidate): SerializedPost {
 }
 
 /**
- * Run the post query described by `sp`: grouping mode when `groupByImage` or `discoverTrends` is
- * set (on-demand clustering over ≤CANDIDATE_CAP filtered candidates, PRD §9), paginated otherwise.
+ * Does anything actually narrow the corpus? `keywords`/`match` drive retrieval rather than filter
+ * it, and sort/paging are presentation — so they don't count.
  */
-export function runPostsQuery(sp: URLSearchParams): PostsResponse {
+function hasHardFilters(f: PostFilters): boolean {
+  return Boolean(
+    (f.platforms && f.platforms.length > 0) ||
+      (f.platform && f.platform !== 'all') ||
+      (f.authors && f.authors.length > 0) ||
+      f.minLikes ||
+      f.minShares ||
+      f.minXFactor !== undefined ||
+      f.market ||
+      (f.timeframe && f.timeframe !== 'all'),
+  )
+}
+
+/** Order a hydrated candidate set by an explicitly requested sort (relevance = leave fused order). */
+function applySort(posts: PostRow[], sort: SortMode | undefined): PostRow[] {
+  switch (sort) {
+    case 'likes':
+      return [...posts].sort((a, b) => b.likes - a.likes)
+    case 'xfactor':
+      return [...posts].sort((a, b) => (b.x_factor ?? -Infinity) - (a.x_factor ?? -Infinity))
+    case 'recent':
+      return [...posts].sort((a, b) => (b.posted_at ?? '').localeCompare(a.posted_at ?? ''))
+    default:
+      return posts // 'relevance' / unset — the fused ranking IS the order
+  }
+}
+
+/**
+ * Hybrid retrieval (PRD §9.5): run the keyword and vector retrievers over the SAME hard-filtered
+ * candidate pool, then fuse their rankings.
+ *
+ * Semantic search is an ENHANCEMENT, never a dependency: if the query can't be embedded (no Voyage
+ * key, API down), this returns the keyword results plus a warning rather than failing the request.
+ * Losing recall is annoying; losing the whole search is worse.
+ */
+async function runHybridQuery(
+  sp: URLSearchParams,
+  filters: PostFilters,
+  availableAuthors: AvailableAuthor[],
+  warnings: string[],
+): Promise<PostsResponse> {
+  const ftsIds = searchFtsRankedIds(filters, RETRIEVAL_CANDIDATES)
+
+  let vectorIds: string[] = []
+  try {
+    // The hard filters shape the pool for the vector side; the FTS side gets them in SQL already.
+    // With no hard filters every post is allowed, and materializing ~90k ids into a Set — then
+    // hashing a string per row during the scan — would cost more than the scan itself. null means
+    // "no restriction" and skips both.
+    const allowed = hasHardFilters(filters) ? new Set(getFilteredPostIds(filters)) : null
+    // The keyword terms ARE the query text. One embedding call per search — a few tokens.
+    // input_type is left unset, matching how every stored vector was embedded (§7).
+    const [queryVector] = await embedTexts([filters.keywords!.join(', ')])
+    if (queryVector) vectorIds = searchSimilar(queryVector, allowed, RETRIEVAL_CANDIDATES)
+  } catch (err) {
+    warnings.push(
+      `Semantic search unavailable, showing keyword results only: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+
+  const fused = reciprocalRankFusion([ftsIds, vectorIds], RRF_K)
+  const page = Math.max(1, Math.floor(filters.page ?? 1))
+  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(filters.pageSize ?? DEFAULT_PAGE_SIZE)))
+  const offset = (page - 1) * pageSize
+
+  // Under an explicit sort the whole retrieved set has to be hydrated before it can be ordered;
+  // under the fused ranking only the requested page does.
+  const explicitSort = filters.sort !== undefined && filters.sort !== 'relevance'
+  const pageRows = explicitSort
+    ? applySort(getPostsByIds(fused.map((f) => f.id)), filters.sort).slice(offset, offset + pageSize)
+    : getPostsByIds(fused.slice(offset, offset + pageSize).map((f) => f.id))
+
+  return {
+    posts: pageRows.map(serializePost),
+    // `total` is the size of the fused CANDIDATE SET (each retriever contributes at most
+    // RETRIEVAL_CANDIDATES), not a corpus-wide count of everything that could match.
+    total: fused.length,
+    page,
+    pageSize,
+    hasMore: offset + pageRows.length < fused.length,
+    availableAuthors,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  }
+}
+
+/**
+ * Run the post query described by `sp`: grouping mode when `groupByImage` or `discoverTrends` is
+ * set (on-demand clustering over ≤CANDIDATE_CAP filtered candidates, PRD §9), hybrid retrieval when
+ * `semantic=true` accompanies a query (§9.5), paginated otherwise.
+ */
+export async function runPostsQuery(sp: URLSearchParams): Promise<PostsResponse> {
   const filters = parsePostFilters(sp)
   const groupByImage = sp.get('groupByImage') === 'true'
   const discoverTrends = sp.get('discoverTrends') === 'true'
   const availableAuthors = getAvailableAuthors(filters)
   const found = collectFilterWarnings(sp)
   const warnings = found.length > 0 ? { warnings: found } : {}
+
+  // Grouping takes precedence: those modes return clusters over a candidate set, not a ranked page.
+  const semantic = sp.get('semantic') === 'true' && !groupByImage && !discoverTrends
+  if (semantic && filters.keywords && filters.keywords.length > 0) {
+    return runHybridQuery(sp, filters, availableAuthors, found)
+  }
 
   if (groupByImage) {
     const imageThreshold = threshold(sp.get('imageThreshold'), IMAGE_SIMILARITY_THRESHOLD)

@@ -2,8 +2,9 @@
 
 import { CANDIDATE_CAP, TIMEFRAME_DAYS } from '@/lib/config'
 import { getDb } from '@/lib/db/db'
+import { buildFtsMatch } from '@/lib/pure/fts-query'
 import { blobToVector } from '@/lib/pure/vector-blob'
-import type { Platform, PostRow, SortMode, Timeframe } from '@/lib/types'
+import type { MatchMode, Platform, PostRow, SortMode, Timeframe } from '@/lib/types'
 
 export interface PostFilters {
   platform?: Platform | 'all'
@@ -11,6 +12,8 @@ export interface PostFilters {
   // an empty/absent list applies no platform filter (= all).
   platforms?: Platform[]
   keywords?: string[]
+  /** How `keywords` combine: 'any' OR's them (default), 'all' AND's them (§11.1). */
+  match?: MatchMode
   authors?: string[]
   minLikes?: number
   minShares?: number
@@ -30,6 +33,17 @@ const POST_COLUMNS = `
   embedding, image_url, image_description, image_embedding, embedded_at,
   weighted_score, creator_baseline, x_factor, raw_data
 `
+
+// `posts` and `posts_fts` BOTH have a `content` column, so a bare `content` is ambiguous once the
+// search index is joined. Qualifying every column is valid with or without the join.
+const QUALIFIED_POST_COLUMNS = POST_COLUMNS.split(',')
+  .map((c) => `posts.${c.trim()}`)
+  .filter((c) => c !== 'posts.')
+  .join(', ')
+
+/** The FROM clause: the search index is joined ONLY when there is a keyword query to match. */
+const FROM_POSTS = 'posts'
+const FROM_POSTS_FTS = 'posts JOIN posts_fts ON posts_fts.rowid = posts.rowid'
 
 const INSERT_SQL = `INSERT OR IGNORE INTO posts (${POST_COLUMNS.replace(/\s+/g, ' ').trim()}) VALUES (
   @id, @platform, @url, @content, @author_name, @author_url, @author_id, @author_type,
@@ -53,6 +67,42 @@ export function insertPosts(posts: PostRow[]): { inserted: number } {
   return { inserted: tx(posts) }
 }
 
+/**
+ * Deliberately re-check known posts: update likes/shares/comments on EXISTING rows by id only (spec:
+ * content loop). Unlike insertPosts' INSERT OR IGNORE, this refreshes the numbers — but it never
+ * inserts: an id that isn't in the table is skipped, not created. Scores are NOT touched here; the
+ * caller recomputes x-factor via recomputeXFactors([authorId]) exactly as the scrape flow does.
+ */
+export function refreshEngagement(
+  updates: { id: string; likes: number; shares: number; comments: number }[],
+): { updated: number } {
+  const db = getDb()
+  const stmt = db.prepare(
+    'UPDATE posts SET likes = @likes, shares = @shares, comments = @comments WHERE id = @id',
+  )
+  const tx = db.transaction((rows: typeof updates) => {
+    let updated = 0
+    for (const row of rows) updated += stmt.run(row).changes
+    return updated
+  })
+  return { updated: tx(updates) }
+}
+
+/**
+ * LinkedIn posts from the recent window for the viral rescan summary (spec: content loop). Best
+ * x_factor first (SQLite sorts NULLs last under DESC), likes breaking ties, so a fresh scan surfaces
+ * the current top of the last few days. `since` is an ISO-8601 instant (posted_at >= since).
+ */
+export function getRecentViralLinkedIn(since: string): PostRow[] {
+  return getDb()
+    .prepare(
+      `SELECT ${POST_COLUMNS} FROM posts
+       WHERE platform = 'linkedin' AND posted_at >= ?
+       ORDER BY x_factor DESC, likes DESC`,
+    )
+    .all(since) as PostRow[]
+}
+
 export function findExistingIds(ids: string[]): Set<string> {
   if (ids.length === 0) return new Set()
   const placeholders = ids.map(() => '?').join(',')
@@ -72,10 +122,19 @@ export function findExistingUrls(urls: string[]): Set<string> {
   return new Set(rows.map((r) => r.url))
 }
 
-/** Build the shared WHERE clause + bound params from a filter set. */
-function buildWhere(filters: PostFilters): { clause: string; params: unknown[] } {
+/**
+ * Build the shared FROM + WHERE clause + bound params from a filter set. `from` joins the FTS index
+ * when (and only when) keywords are present; `fts` tells the caller whether bm25 is orderable.
+ */
+function buildWhere(filters: PostFilters): {
+  from: string
+  clause: string
+  params: unknown[]
+  fts: boolean
+} {
   const conditions: string[] = []
   const params: unknown[] = []
+  let fts = false
 
   if (filters.platforms && filters.platforms.length > 0) {
     // §17.4 multi-platform subset: platform IN (…). Empty list = no filter (handled by the guard).
@@ -86,9 +145,17 @@ function buildWhere(filters: PostFilters): { clause: string; params: unknown[] }
     params.push(filters.platform)
   }
   if (filters.keywords && filters.keywords.length > 0) {
-    const ors = filters.keywords.map(() => 'content LIKE ?')
-    conditions.push(`(${ors.join(' OR ')})`)
-    for (const kw of filters.keywords) params.push(`%${kw}%`)
+    const match = buildFtsMatch(filters.keywords, filters.match ?? 'any')
+    if (match === null) {
+      // The user asked for something, and NOTHING they typed is indexable (pure punctuation/emoji).
+      // That means zero results — never the whole corpus, which is what dropping the filter here
+      // would silently return.
+      conditions.push('0')
+    } else {
+      fts = true
+      conditions.push('posts_fts MATCH ?')
+      params.push(match)
+    }
   }
   if (filters.authors && filters.authors.length > 0) {
     conditions.push(`author_id IN (${filters.authors.map(() => '?').join(',')})`)
@@ -127,17 +194,24 @@ function buildWhere(filters: PostFilters): { clause: string; params: unknown[] }
   }
 
   const clause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
-  return { clause, params }
+  return { from: fts ? FROM_POSTS_FTS : FROM_POSTS, clause, params, fts }
 }
 
-function orderBy(sort: SortMode | undefined): string {
+/** `fts` = the search index is joined, so bm25 is in scope. Without it 'relevance' has nothing to
+ *  score and degrades to the default ordering rather than erroring. */
+function orderBy(sort: SortMode | undefined, fts: boolean): string {
   switch (sort) {
     case 'likes':
-      return 'ORDER BY likes DESC'
+      return 'ORDER BY posts.likes DESC'
     case 'xfactor':
-      return 'ORDER BY x_factor DESC' // SQLite sorts NULLs last under DESC
+      return 'ORDER BY posts.x_factor DESC' // SQLite sorts NULLs last under DESC
+    case 'relevance':
+      // bm25 is negative and MORE negative = better, so ascending is best-first. posted_at breaks
+      // ties so the ordering is stable rather than whatever the index happens to yield.
+      if (fts) return 'ORDER BY bm25(posts_fts), posts.posted_at DESC'
+      return 'ORDER BY posts.posted_at DESC'
     default:
-      return 'ORDER BY posted_at DESC'
+      return 'ORDER BY posts.posted_at DESC'
   }
 }
 
@@ -149,10 +223,10 @@ export function searchPosts(filters: PostFilters): {
   hasMore: boolean
 } {
   const db = getDb()
-  const { clause, params } = buildWhere(filters)
+  const { from, clause, params, fts } = buildWhere(filters)
 
   const total = (
-    db.prepare(`SELECT COUNT(*) AS n FROM posts ${clause}`).get(...params) as { n: number }
+    db.prepare(`SELECT COUNT(*) AS n FROM ${from} ${clause}`).get(...params) as { n: number }
   ).n
 
   // Clamp defensively: a non-finite page/pageSize would survive Math.min/Math.max as NaN, bind as
@@ -165,10 +239,82 @@ export function searchPosts(filters: PostFilters): {
   const offset = (page - 1) * pageSize
 
   const posts = db
-    .prepare(`SELECT ${POST_COLUMNS} FROM posts ${clause} ${orderBy(filters.sort)} LIMIT ? OFFSET ?`)
+    .prepare(
+      `SELECT ${QUALIFIED_POST_COLUMNS} FROM ${from} ${clause} ${orderBy(filters.sort, fts)} LIMIT ? OFFSET ?`,
+    )
     .all(...params, pageSize, offset) as PostRow[]
 
   return { posts, total, page, pageSize, hasMore: offset + posts.length < total }
+}
+
+/**
+ * Stream every post that has a text embedding, one row at a time (PRD §9.5). `.iterate()` rather
+ * than `.all()` on purpose: materializing ~90k BLOBs as an array first would hold ~360MB of Buffers
+ * alongside the ~360MB Float32Array being built from them, doubling peak memory for no reason.
+ */
+export function* iterateEmbeddedVectors(): Generator<{ id: string; embedding: Buffer }> {
+  const rows = getDb()
+    .prepare('SELECT id, embedding FROM posts WHERE embedding IS NOT NULL ORDER BY rowid')
+    .iterate() as IterableIterator<{ id: string; embedding: Buffer }>
+  for (const row of rows) yield row
+}
+
+/**
+ * Row count and vector width of the embedded corpus, so the index can allocate its matrix EXACTLY
+ * once (PRD §9.5). Without this the builder would have to accumulate ~90k decoded vectors as JS
+ * arrays before it knew how big the matrix should be — roughly 700MB of garbage on top of the
+ * 350MB matrix itself.
+ */
+export function getEmbeddingStats(): { count: number; dim: number } {
+  const db = getDb()
+  const count = (
+    db.prepare('SELECT COUNT(*) AS n FROM posts WHERE embedding IS NOT NULL').get() as { n: number }
+  ).n
+  if (count === 0) return { count: 0, dim: 0 }
+  const bytes = (
+    db.prepare('SELECT length(embedding) AS n FROM posts WHERE embedding IS NOT NULL LIMIT 1').get() as {
+      n: number
+    }
+  ).n
+  return { count, dim: Math.floor(bytes / 4) } // Float32 = 4 bytes
+}
+
+/**
+ * The ids passing the HARD filters only — keywords excluded (PRD §9.5). This is the candidate set
+ * that both retrievers are restricted to, so platform / engagement / x-factor / timeframe shape the
+ * pool BEFORE ranking rather than trimming the results after.
+ */
+export function getFilteredPostIds(filters: PostFilters): string[] {
+  const { from, clause, params } = buildWhere({ ...filters, keywords: undefined })
+  return (
+    getDb().prepare(`SELECT posts.id FROM ${from} ${clause}`).all(...params) as { id: string }[]
+  ).map((r) => r.id)
+}
+
+/** Post ids matching the keyword query, best bm25 first, capped at `limit` (PRD §9.5). */
+export function searchFtsRankedIds(filters: PostFilters, limit: number): string[] {
+  const { from, clause, params, fts } = buildWhere(filters)
+  if (!fts) return []
+  return (
+    getDb()
+      .prepare(
+        `SELECT posts.id FROM ${from} ${clause} ORDER BY bm25(posts_fts), posts.posted_at DESC LIMIT ?`,
+      )
+      .all(...params, limit) as { id: string }[]
+  ).map((r) => r.id)
+}
+
+/** Hydrate posts by id, returned IN THE ORDER GIVEN — the fused ranking, not the table's. */
+export function getPostsByIds(ids: string[]): PostRow[] {
+  if (ids.length === 0) return []
+  const placeholders = ids.map(() => '?').join(',')
+  const rows = getDb()
+    .prepare(`SELECT ${POST_COLUMNS} FROM posts WHERE id IN (${placeholders})`)
+    .all(...ids) as PostRow[]
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  // A requested id can be absent (deleted between ranking and hydration); drop it rather than
+  // emitting a hole in the page.
+  return ids.map((id) => byId.get(id)).filter((r): r is PostRow => r !== undefined)
 }
 
 /** A full post row plus its decoded vectors — carries every field so the UI can render the member
@@ -183,14 +329,16 @@ export function getCandidatesForClustering(
   requireImageEmbedding: boolean,
 ): ClusteringCandidate[] {
   const db = getDb()
-  const { clause, params } = buildWhere(filters)
+  const { from, clause, params } = buildWhere(filters)
   const extra = requireImageEmbedding
-    ? 'embedding IS NOT NULL AND image_embedding IS NOT NULL'
-    : 'embedding IS NOT NULL'
+    ? 'posts.embedding IS NOT NULL AND posts.image_embedding IS NOT NULL'
+    : 'posts.embedding IS NOT NULL'
   const where = clause ? `${clause} AND ${extra}` : `WHERE ${extra}`
 
   const rows = db
-    .prepare(`SELECT ${POST_COLUMNS} FROM posts ${where} ORDER BY likes DESC LIMIT ?`)
+    .prepare(
+      `SELECT ${QUALIFIED_POST_COLUMNS} FROM ${from} ${where} ORDER BY posts.likes DESC LIMIT ?`,
+    )
     .all(...params, CANDIDATE_CAP) as PostRow[]
 
   return rows.map((r) => ({
@@ -221,6 +369,22 @@ export interface CorpusStats {
   enrichment: { embedded: number; imageEmbedded: number; withTranscript: number }
   creators: number
   lastScrapedAt: string | null
+}
+
+/**
+ * The most recent `scraped_at` per platform, or null for a platform with no posts (PRD §11.8).
+ * This is the honest "when did we last actually get data here" — a scrape_jobs row only records
+ * which platforms were REQUESTED, not which ones returned anything.
+ */
+export function getLastScrapeByPlatform(): Record<Platform, string | null> {
+  const rows = getDb()
+    .prepare('SELECT platform, MAX(scraped_at) AS last FROM posts GROUP BY platform')
+    .all() as { platform: Platform; last: string | null }[]
+  const last: Record<Platform, string | null> = { linkedin: null, twitter: null, substack: null, instagram: null }
+  for (const row of rows) {
+    if (row.platform in last) last[row.platform] = row.last
+  }
+  return last
 }
 
 export function getCorpusStats(): CorpusStats {
@@ -306,14 +470,16 @@ function scoreIsBetter(a: [number, number, number], b: [number, number, number])
  */
 export function getAvailableAuthors(filters: PostFilters): AvailableAuthor[] {
   const db = getDb()
-  const { clause, params } = buildWhere({ ...filters, authors: undefined })
-  const where = clause ? `${clause} AND author_id IS NOT NULL` : 'WHERE author_id IS NOT NULL'
+  const { from, clause, params } = buildWhere({ ...filters, authors: undefined })
+  const where = clause
+    ? `${clause} AND posts.author_id IS NOT NULL`
+    : 'WHERE posts.author_id IS NOT NULL'
 
   const rows = db
     .prepare(
-      `SELECT author_id, author_name, platform, COUNT(*) AS cnt
-       FROM posts ${where}
-       GROUP BY author_id, author_name, platform`,
+      `SELECT posts.author_id, posts.author_name, posts.platform, COUNT(*) AS cnt
+       FROM ${from} ${where}
+       GROUP BY posts.author_id, posts.author_name, posts.platform`,
     )
     .all(...params) as { author_id: string; author_name: string | null; platform: Platform; cnt: number }[]
 

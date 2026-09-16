@@ -93,6 +93,51 @@ export interface ScrapeJobRow {
 // --- settings (PRD §6.4) ---------------------------------------------------
 export type SettingsMap = Record<string, string>
 
+// --- comments on her own posts (PRD §23) -------------------------------------
+/** One item from harvestapi/linkedin-post-comments. Field names verified against a live run on
+ *  2026-09-15; raw_data preserves the rest. */
+export interface ApifyComment {
+  id?: string
+  linkedinUrl?: string // ...?commentUrn=<urn> (and &replyUrn=<urn> when the item is a reply)
+  commentary?: string | null
+  createdAt?: string
+  postId?: string // 'urn:li:activity:<post id>'
+  pinned?: boolean
+  edited?: boolean
+  engagement?: { likes?: number; comments?: number; shares?: number; reactions?: unknown[] } | null
+  actor?: {
+    type?: AuthorType
+    universalName?: string
+    publicIdentifier?: string
+    name?: string
+    linkedinUrl?: string
+    position?: string // the commenter's headline
+    author?: boolean // true when the commenter is the post's author
+  }
+  [key: string]: unknown
+}
+
+/** post_comments row (PRD §6.9). Booleans are INTEGER 0/1. */
+export interface CommentRow {
+  id: string
+  post_id: string
+  parent_comment_id: string | null // the comment a reply answers; null when top-level
+  author_name: string | null
+  author_id: string | null
+  author_url: string | null
+  author_headline: string | null
+  author_type: AuthorType | null
+  is_post_author: number // 0 | 1
+  text: string | null
+  likes: number
+  replies: number
+  pinned: number // 0 | 1
+  edited: number // 0 | 1
+  commented_at: string | null
+  scraped_at: string
+  raw_data: string | null
+}
+
 // --- Apify raw shapes (PRD §10.3) ------------------------------------------
 // Minimal shapes for the fields the mappers read; raw_data preserves the rest.
 export interface ApifyPost {

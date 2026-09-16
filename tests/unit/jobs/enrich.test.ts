@@ -3,6 +3,7 @@ import { enrichPosts } from '@/jobs/enrich'
 import { countUnembedded, getUnembedded, setEmbedding } from '@/lib/db/posts.repo'
 import { embedImage, embedTexts } from '@/lib/voyage'
 import { describeImage } from '@/lib/anthropic'
+import { resetVectorIndex } from '@/lib/db/vector-index'
 import { blobToVector, vectorToBlob } from '@/lib/pure/vector-blob'
 import { makePostRow } from '@/tests/fixtures/posts'
 
@@ -19,6 +20,9 @@ vi.mock('@/lib/voyage', () => ({
 vi.mock('@/lib/anthropic', () => ({
   describeImage: vi.fn(),
 }))
+vi.mock('@/lib/db/vector-index', () => ({
+  resetVectorIndex: vi.fn(),
+}))
 
 const mocked = {
   getUnembedded: vi.mocked(getUnembedded),
@@ -27,6 +31,7 @@ const mocked = {
   embedTexts: vi.mocked(embedTexts),
   embedImage: vi.mocked(embedImage),
   describeImage: vi.mocked(describeImage),
+  resetVectorIndex: vi.mocked(resetVectorIndex),
 }
 
 beforeEach(() => {
@@ -154,5 +159,17 @@ describe('enrichPosts', () => {
     const [, textBlob] = mocked.setEmbedding.mock.calls[0]!
     expect(blobToVector(textBlob)).toEqual([2, 0, 0, 0])
     expect(res.embedded).toBe(1)
+  })
+})
+
+describe('enrichPosts — vector index freshness (§9.5)', () => {
+  it('invalidates the cached vector index after writing embeddings', async () => {
+    // The index is an in-process cache of exactly these rows: without the reset, everything embedded
+    // during a scrape stays invisible to semantic search until the server restarts.
+    mocked.getUnembedded.mockReturnValue([makePostRow({ id: 'a', content: 'first', image_url: null })])
+    mocked.embedTexts.mockResolvedValue([[1, 0, 0, 0]])
+
+    await enrichPosts(50)
+    expect(mocked.resetVectorIndex).toHaveBeenCalled()
   })
 })

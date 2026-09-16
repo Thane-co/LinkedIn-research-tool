@@ -8,5 +8,5 @@ import { runPostsQuery } from '@/lib/posts-query'
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: Request): Promise<NextResponse> {
-  return NextResponse.json(runPostsQuery(new URL(req.url).searchParams))
+  return NextResponse.json(await runPostsQuery(new URL(req.url).searchParams))
 }

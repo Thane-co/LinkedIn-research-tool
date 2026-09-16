@@ -26,6 +26,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     timeframe?: Timeframe
     market?: string
     includeNotes?: boolean
+    minimumFavorites?: number // Twitter keyword runs only (§11.8)
   }
   const platforms = body.platforms ?? ['linkedin', 'twitter', 'substack', 'instagram']
   const mode = body.mode ?? 'both'
@@ -50,6 +51,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     timeframe,
     market,
     includeNotes: body.includeNotes ?? false,
+    minimumFavorites: body.minimumFavorites,
     jobId: job.id,
   }).catch((err) => console.error('scrape: runScrape crashed:', (err as Error).message))
 

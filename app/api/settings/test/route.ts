@@ -53,7 +53,7 @@ async function testAnthropic(): Promise<ProbeResult> {
   )
 }
 
-// Gates only the temporary ig-compare tab, not core Search.
+// Gates Instagram video transcription (§18), not core Search.
 async function testAssemblyai(): Promise<ProbeResult> {
   const key = getKey('assemblyai_api_key')
   if (!key) return { ok: false, error: 'API key not set' }

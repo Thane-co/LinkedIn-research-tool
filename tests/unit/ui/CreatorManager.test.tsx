@@ -104,3 +104,69 @@ describe('CreatorManager', () => {
     expect(deletedId).toBe('c1')
   })
 })
+
+describe('CreatorManager — person x platform table (PRD §11.8)', () => {
+  const rows = [
+    creator({ id: 'c1', platform: 'linkedin', display_name: 'Jane Doe', persona: 'jane doe' }),
+    creator({
+      id: 'c2',
+      platform: 'twitter',
+      display_name: 'Jane Doe',
+      persona: 'jane doe',
+      author_id: 'janedev',
+      profile_url: 'https://x.com/janedev',
+    }),
+    creator({
+      id: 'c3',
+      platform: 'substack',
+      display_name: 'Ada L',
+      persona: 'ada l',
+      profile_url: 'https://ada.substack.com',
+    }),
+  ]
+
+  it('counts accounts per platform in the header', async () => {
+    server.use(http.get('*/api/creators', () => HttpResponse.json({ creators: rows, tags: [] })))
+    render(<CreatorManager />)
+    expect(await screen.findByText(/1 LinkedIn/)).toBeInTheDocument()
+    expect(screen.getByText(/1 X\b/)).toBeInTheDocument()
+    expect(screen.getByText(/0 Instagram/)).toBeInTheDocument()
+  })
+
+  it('puts one person on one row across platforms', async () => {
+    server.use(http.get('*/api/creators', () => HttpResponse.json({ creators: rows, tags: [] })))
+    render(<CreatorManager />)
+    // 3 accounts, 2 people -> 2 body rows
+    await screen.findByText('Jane Doe')
+    expect(screen.getAllByRole('row')).toHaveLength(3) // header + 2 people
+  })
+
+  it('offers an add button on each platform a person is missing', async () => {
+    server.use(http.get('*/api/creators', () => HttpResponse.json({ creators: rows, tags: [] })))
+    render(<CreatorManager />)
+    expect(await screen.findByRole('button', { name: /add substack for jane doe/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /add linkedin for jane doe/i })).toBeNull()
+  })
+
+  it('prefills the Person field when an add cell is clicked, so the account links up', async () => {
+    server.use(http.get('*/api/creators', () => HttpResponse.json({ creators: rows, tags: [] })))
+    render(<CreatorManager />)
+    await userEvent.click(await screen.findByRole('button', { name: /add substack for jane doe/i }))
+    expect(screen.getByLabelText(/^person$/i)).toHaveValue('jane doe')
+  })
+
+  it('links accounts by name via the backfill endpoint', async () => {
+    let called = false
+    server.use(
+      http.get('*/api/creators', () => HttpResponse.json({ creators: rows, tags: [] })),
+      http.post('*/api/creators/backfill-personas', () => {
+        called = true
+        return HttpResponse.json({ updated: 2, creators: rows, tags: [] })
+      }),
+    )
+    render(<CreatorManager />)
+    await userEvent.click(await screen.findByRole('button', { name: /link accounts by name/i }))
+    await waitFor(() => expect(called).toBe(true))
+    expect(await screen.findByText(/linked 2/i)).toBeInTheDocument()
+  })
+})

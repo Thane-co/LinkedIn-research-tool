@@ -669,6 +669,74 @@ button[aria-pressed='true']:hover:not(:disabled) {
   border-radius: var(--radius-sm);
   padding: 8px 10px;
 }
+/* §23 — comment thread under one of her own posts; a reply indents under the comment it answers. */
+.post-card__comments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+.post-card__comments-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.post-card__comments-count,
+.post-card__comments-empty,
+.post-card__comment-headline {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.post-card__comments-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.post-card__comments-error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+.post-card__comments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 360px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.post-card__comment {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.post-card__comment--reply {
+  margin-left: var(--space);
+  border-left: 2px solid var(--border-strong);
+}
+.post-card__comment-author {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.post-card__comment-text {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 14px;
+  color: var(--text);
+}
 .post-card__image {
   width: 100%;
   border-radius: var(--radius-sm);

@@ -22,7 +22,7 @@ export function setSettings(partial: SettingsMap): void {
 }
 
 /** Which providers have their required key present (used to gate features, PRD §11.4).
- *  assemblyai gates only the temporary ig-compare tab, not core Search. */
+ *  assemblyai gates Instagram video transcription (§18), not core Search. */
 export function readiness(): { apify: boolean; voyage: boolean; anthropic: boolean; assemblyai: boolean } {
   return {
     apify: getKey('apify_api_token') !== undefined,

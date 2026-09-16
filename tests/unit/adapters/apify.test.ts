@@ -4,7 +4,7 @@ import { getDb, resetDb } from '@/lib/db/db'
 import { setSettings } from '@/lib/settings'
 import {
   buildInstagramCreatorInput,
-  buildInstagramTranscriptInput,
+  buildLinkedInCommentsInput,
   buildLinkedInCreatorInput,
   buildLinkedInKeywordInput,
   buildLinkedInProfileInput,
@@ -20,6 +20,16 @@ beforeEach(() => {
   getDb(':memory:')
 })
 afterEach(() => resetDb())
+
+describe('buildLinkedInCommentsInput (§23)', () => {
+  it('sends the post urls and asks for every comment (maxItems 0), replies included', () => {
+    expect(buildLinkedInCommentsInput(['https://li/p/1', 'https://li/p/2'])).toEqual({
+      posts: ['https://li/p/1', 'https://li/p/2'],
+      maxItems: 0,
+      scrapeReplies: true,
+    })
+  })
+})
 
 describe('input builders (pure)', () => {
   it('LinkedIn keyword: searchQueries + relevance sort + maxPosts 200, reactions/comments off', () => {
@@ -163,15 +173,6 @@ describe('input builders (pure)', () => {
     expect('urls' in input).toBe(false) // the actor keys off `queries`, not `urls`
   })
 
-  it('Instagram transcript: videoUrls + auto method, no segments (§18)', () => {
-    const input = buildInstagramTranscriptInput([
-      'https://www.instagram.com/reel/AAA/',
-      'https://www.instagram.com/p/BBB/',
-    ]) as Record<string, unknown>
-    expect(input.videoUrls).toEqual(['https://www.instagram.com/reel/AAA/', 'https://www.instagram.com/p/BBB/'])
-    expect(input.transcriptionMethod).toBe('auto') // native captions first, Whisper fallback
-    expect(input.includeSegments).toBe(false)
-  })
 })
 
 const BASE = 'https://api.apify.com/v2'

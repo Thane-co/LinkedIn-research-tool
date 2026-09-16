@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getDb, resetDb } from '@/lib/db/db'
 import { setSettings } from '@/lib/settings'
 import { embedImage, embedTexts } from '@/lib/voyage'
-import { VOYAGE_MULTIMODAL_URL, VOYAGE_TEXT_URL } from '@/lib/config'
+import { MAX_IMAGE_BYTES, VOYAGE_MULTIMODAL_URL, VOYAGE_TEXT_URL } from '@/lib/config'
 import { server } from '@/tests/msw/server'
 
 beforeEach(() => getDb(':memory:'))
@@ -96,24 +96,74 @@ describe('embedTexts', () => {
   })
 })
 
+// embedImage DOWNLOADS the image and posts it as base64 rather than handing Voyage the url (§7.3).
+// Voyage's server-side fetcher is blocked by LinkedIn's CDN — it answers 400 "image URL is invalid"
+// for urls that are signed, unexpired, and serve a 200 to us — so passing a url embedded NOTHING
+// from LinkedIn, which is the bulk of the corpus.
+const imageBytes = (body: Uint8Array, contentType = 'image/jpeg'): Response =>
+  new HttpResponse(body, { headers: { 'content-type': contentType } })
+
+const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+
 describe('embedImage', () => {
-  it('returns a single embedding for an image url', async () => {
+  it('downloads the image and sends it to Voyage as inline base64, not as a url', async () => {
     setSettings({ voyage_api_key: 'vk' })
+    let sent: { type: string; image_base64?: string; image_url?: string } | undefined
     server.use(
-      http.post(VOYAGE_MULTIMODAL_URL, () =>
-        HttpResponse.json({ data: [{ embedding: [1, 2, 3, 4] }] }),
-      ),
+      http.get('https://img/1.png', () => imageBytes(PNG, 'image/png')),
+      http.post(VOYAGE_MULTIMODAL_URL, async ({ request }) => {
+        const body = (await request.json()) as {
+          inputs: { content: { type: string; image_base64?: string; image_url?: string }[] }[]
+        }
+        sent = body.inputs[0]!.content[0]
+        return HttpResponse.json({ data: [{ embedding: [1, 2, 3, 4] }] })
+      }),
     )
     expect(await embedImage('https://img/1.png')).toEqual([1, 2, 3, 4])
+    expect(sent?.type).toBe('image_base64')
+    expect(sent?.image_url).toBeUndefined()
+    expect(sent?.image_base64).toBe(`data:image/png;base64,${Buffer.from(PNG).toString('base64')}`)
   })
 
-  it('throws when the key is unset', async () => {
+  it('throws when the key is unset, before fetching anything', async () => {
     await expect(embedImage('https://img/1.png')).rejects.toThrow(/voyage/i)
   })
 
   it('throws on a malformed 2xx response (empty data / missing embedding)', async () => {
     setSettings({ voyage_api_key: 'vk' })
-    server.use(http.post(VOYAGE_MULTIMODAL_URL, () => HttpResponse.json({ data: [] })))
+    server.use(
+      http.get('https://img/1.png', () => imageBytes(PNG, 'image/png')),
+      http.post(VOYAGE_MULTIMODAL_URL, () => HttpResponse.json({ data: [] })),
+    )
     await expect(embedImage('https://img/1.png')).rejects.toThrow(/voyage/i)
+  })
+
+  it('reports an unreachable image (expired signed url) distinctly from a Voyage failure', async () => {
+    setSettings({ voyage_api_key: 'vk' })
+    server.use(http.get('https://img/gone.png', () => new HttpResponse(null, { status: 403 })))
+    await expect(embedImage('https://img/gone.png')).rejects.toThrow(/image fetch failed \(403\)/i)
+  })
+
+  it('refuses a response that is not an image, rather than base64-ing an error page', async () => {
+    setSettings({ voyage_api_key: 'vk' })
+    server.use(
+      http.get('https://img/notimg', () =>
+        HttpResponse.text('<html>nope</html>', { headers: { 'content-type': 'text/html' } }),
+      ),
+    )
+    await expect(embedImage('https://img/notimg')).rejects.toThrow(/not an image/i)
+  })
+
+  it('refuses an oversized image instead of building a huge request body', async () => {
+    setSettings({ voyage_api_key: 'vk' })
+    server.use(
+      http.get('https://img/huge.png', () => imageBytes(new Uint8Array(MAX_IMAGE_BYTES + 1), 'image/png')),
+    )
+    await expect(embedImage('https://img/huge.png')).rejects.toThrow(/too large/i)
+  })
+
+  it('refuses a non-http(s) url — this fetch runs server-side, so the scheme is not decoration', async () => {
+    setSettings({ voyage_api_key: 'vk' })
+    await expect(embedImage('file:///etc/passwd')).rejects.toThrow(/http/i)
   })
 })

@@ -13,6 +13,8 @@ const baseFilters = (over: Partial<Filters> = {}): Filters => ({
   minXFactor: 0,
   timeframe: 'week',
   sort: 'recent',
+  match: 'any',
+  semantic: false,
   groupByImage: false,
   discoverTrends: false,
   imageThreshold: 0.8,
@@ -145,5 +147,80 @@ describe('DashboardFilterBar', () => {
     )
     expect(screen.getByLabelText('From')).toBeInTheDocument()
     expect(screen.getByLabelText('To')).toBeInTheDocument()
+  })
+})
+
+describe('DashboardFilterBar — keyword match mode (§11.1)', () => {
+  it('offers the match control only once there is a keyword to combine', () => {
+    const { rerender } = render(
+      <DashboardFilterBar filters={baseFilters()} availableAuthors={authors} onChange={vi.fn()} />,
+    )
+    expect(screen.queryByLabelText('Match')).not.toBeInTheDocument()
+
+    rerender(
+      <DashboardFilterBar
+        filters={baseFilters({ keywords: ['cold', 'outbound'] })}
+        availableAuthors={authors}
+        onChange={vi.fn()}
+      />,
+    )
+    expect(screen.getByLabelText('Match')).toBeInTheDocument()
+  })
+
+  it("switches the keyword filter to 'all' (every term required)", async () => {
+    const onChange = vi.fn()
+    render(
+      <DashboardFilterBar
+        filters={baseFilters({ keywords: ['cold', 'outbound'] })}
+        availableAuthors={authors}
+        onChange={onChange}
+      />,
+    )
+    await userEvent.selectOptions(screen.getByLabelText('Match'), 'all')
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ match: 'all' }))
+  })
+
+  it('offers relevance as a sort option', async () => {
+    const onChange = vi.fn()
+    render(
+      <DashboardFilterBar
+        filters={baseFilters({ keywords: ['ai'] })}
+        availableAuthors={authors}
+        onChange={onChange}
+      />,
+    )
+    await userEvent.selectOptions(screen.getByLabelText('Sort'), 'relevance')
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ sort: 'relevance' }))
+  })
+})
+
+describe('DashboardFilterBar — semantic search (§9.5)', () => {
+  it('offers the meaning toggle only once there is a query to embed', () => {
+    const { rerender } = render(
+      <DashboardFilterBar filters={baseFilters()} availableAuthors={authors} onChange={vi.fn()} />,
+    )
+    expect(screen.queryByLabelText(/meaning/i)).not.toBeInTheDocument()
+
+    rerender(
+      <DashboardFilterBar
+        filters={baseFilters({ keywords: ['hiring'] })}
+        availableAuthors={authors}
+        onChange={vi.fn()}
+      />,
+    )
+    expect(screen.getByLabelText(/meaning/i)).toBeInTheDocument()
+  })
+
+  it('turns semantic search on', async () => {
+    const onChange = vi.fn()
+    render(
+      <DashboardFilterBar
+        filters={baseFilters({ keywords: ['hiring'] })}
+        availableAuthors={authors}
+        onChange={onChange}
+      />,
+    )
+    await userEvent.click(screen.getByLabelText(/meaning/i))
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ semantic: true }))
   })
 })

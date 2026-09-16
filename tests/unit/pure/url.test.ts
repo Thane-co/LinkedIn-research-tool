@@ -9,6 +9,8 @@ import {
   isProxyableMediaUrl,
   mediaProxySrc,
   normalizeProfileUrl,
+  isExpiredMediaUrl,
+  mediaUrlExpiry,
   safeHref,
 } from '@/lib/pure/url'
 
@@ -233,5 +235,53 @@ describe('mediaProxySrc', () => {
     expect(mediaProxySrc(null)).toBeUndefined()
     expect(mediaProxySrc(undefined)).toBeUndefined()
     expect(mediaProxySrc('javascript:alert(1)')).toBeUndefined()
+  })
+})
+
+// Signed CDN media urls carry their own expiry. Once it passes the CDN answers 403 forever, so the
+// card can tell the image is dead WITHOUT a request — 37k+ posts in the corpus are in that state,
+// and each would otherwise fire a doomed fetch through /api/media just to render a broken icon.
+describe('mediaUrlExpiry / isExpiredMediaUrl', () => {
+  const AT = Date.UTC(2026, 8, 8) // 2026-09-08, the "now" these tests reason about
+  const secs = (ms: number): number => Math.floor(ms / 1000)
+
+  it('reads LinkedIn\'s decimal `e=` seconds', () => {
+    const past = secs(AT) - 86_400
+    expect(mediaUrlExpiry(`https://media.licdn.com/dms/image/v2/x/feedshare/0/1?e=${past}&v=beta&t=z`)).toBe(
+      past * 1000,
+    )
+  })
+
+  it('reads the Instagram/Facebook CDN\'s HEX `oe=` seconds', () => {
+    // oe=6A60A606 is 2026-07-22 — the convention really is base 16, not base 10.
+    expect(mediaUrlExpiry('https://scontent.cdninstagram.com/v/t51/1.jpg?stp=x&oe=6A60A606')).toBe(
+      0x6a60a606 * 1000,
+    )
+  })
+
+  it('returns null when the url carries no expiry at all (Substack, local paths)', () => {
+    expect(mediaUrlExpiry('https://substackcdn.com/image/fetch/a.jpg')).toBeNull()
+    expect(mediaUrlExpiry('/post-images/posts/123.jpg')).toBeNull()
+  })
+
+  it('ignores an implausible timestamp rather than hiding a live image', () => {
+    // A false positive HIDES a working image, so anything outside a sane date range is "no expiry".
+    expect(mediaUrlExpiry('https://media.licdn.com/x?e=1')).toBeNull() // 1970
+    expect(mediaUrlExpiry('https://media.licdn.com/x?e=99999999999')).toBeNull() // year 5138
+    expect(mediaUrlExpiry('https://media.licdn.com/x?e=notanumber')).toBeNull()
+  })
+
+  it('flags a url whose expiry has passed, and spares one that has not', () => {
+    const past = secs(AT) - 86_400
+    const future = secs(AT) + 86_400
+    expect(isExpiredMediaUrl(`https://media.licdn.com/x?e=${past}&v=beta&t=z`, AT)).toBe(true)
+    expect(isExpiredMediaUrl(`https://media.licdn.com/x?e=${future}&v=beta&t=z`, AT)).toBe(false)
+  })
+
+  it('treats an unsigned or missing url as not-expired (nothing to go on)', () => {
+    expect(isExpiredMediaUrl(null, AT)).toBe(false)
+    expect(isExpiredMediaUrl(undefined, AT)).toBe(false)
+    expect(isExpiredMediaUrl('/post-images/posts/123.jpg', AT)).toBe(false)
+    expect(isExpiredMediaUrl('https://substackcdn.com/a.jpg', AT)).toBe(false)
   })
 })

@@ -9,9 +9,11 @@ import {
   getCandidatesForClustering,
   getCorpusStats,
   getPostById,
+  getRecentViralLinkedIn,
   getUnembedded,
   getVideoPostsMissingTranscript,
   insertPosts,
+  refreshEngagement,
   searchPosts,
   setEmbedding,
   setTranscript,
@@ -63,6 +65,67 @@ describe('insertPosts + existence lookups', () => {
     seed([{ id: 'a', url: 'ua' }, { id: 'b', url: 'ub' }])
     expect(findExistingIds(['a', 'x', 'b'])).toEqual(new Set(['a', 'b']))
     expect(findExistingUrls(['ua', 'zzz'])).toEqual(new Set(['ua']))
+  })
+})
+
+describe('refreshEngagement', () => {
+  it('updates an existing row engagement numbers by id', () => {
+    seed([{ id: 'a', likes: 10, shares: 1, comments: 2 }])
+    const res = refreshEngagement([{ id: 'a', likes: 812, shares: 12, comments: 44 }])
+    expect(res.updated).toBe(1)
+    const [row] = searchPosts({}).posts
+    expect({ likes: row!.likes, shares: row!.shares, comments: row!.comments }).toEqual({
+      likes: 812,
+      shares: 12,
+      comments: 44,
+    })
+  })
+
+  it('no-ops for an unknown id: does not throw and does not insert', () => {
+    seed([{ id: 'a', likes: 5 }])
+    const res = refreshEngagement([{ id: 'ghost', likes: 999, shares: 9, comments: 9 }])
+    expect(res.updated).toBe(0)
+    expect(searchPosts({}).total).toBe(1) // no new row inserted
+    expect(getPostById('ghost')).toBeNull()
+  })
+
+  it('a batch updates only the ids given, leaving the rest untouched', () => {
+    seed([
+      { id: 'a', likes: 1, shares: 1, comments: 1 },
+      { id: 'b', likes: 2, shares: 2, comments: 2 },
+      { id: 'c', likes: 3, shares: 3, comments: 3 },
+    ])
+    const res = refreshEngagement([
+      { id: 'a', likes: 100, shares: 10, comments: 5 },
+      { id: 'c', likes: 300, shares: 30, comments: 15 },
+    ])
+    expect(res.updated).toBe(2)
+    const byId = Object.fromEntries(searchPosts({}).posts.map((p) => [p.id, p.likes]))
+    expect(byId).toEqual({ a: 100, b: 2, c: 300 })
+  })
+})
+
+describe('getRecentViralLinkedIn', () => {
+  it('returns recent LinkedIn posts, best x_factor first then likes, nulls last', () => {
+    const since = isoAgo(72 * HOUR)
+    seed([
+      { id: 'top', platform: 'linkedin', posted_at: isoAgo(1 * HOUR), x_factor: 4, likes: 100 },
+      { id: 'mid', platform: 'linkedin', posted_at: isoAgo(2 * HOUR), x_factor: 2, likes: 900 },
+      { id: 'nullhi', platform: 'linkedin', posted_at: isoAgo(3 * HOUR), x_factor: null, likes: 500 },
+      { id: 'nulllo', platform: 'linkedin', posted_at: isoAgo(4 * HOUR), x_factor: null, likes: 50 },
+      { id: 'old', platform: 'linkedin', posted_at: isoAgo(5 * DAY), x_factor: 9, likes: 9 }, // outside 72h
+      { id: 'tw', platform: 'twitter', posted_at: isoAgo(1 * HOUR), x_factor: 9, likes: 9 }, // wrong platform
+    ])
+    expect(getRecentViralLinkedIn(since).map((p) => p.id)).toEqual(['top', 'mid', 'nullhi', 'nulllo'])
+  })
+
+  it('breaks x_factor ties by likes DESC', () => {
+    const since = isoAgo(72 * HOUR)
+    seed([
+      { id: 'a', platform: 'linkedin', posted_at: isoAgo(1 * HOUR), x_factor: 3, likes: 10 },
+      { id: 'b', platform: 'linkedin', posted_at: isoAgo(2 * HOUR), x_factor: 3, likes: 90 },
+    ])
+    expect(getRecentViralLinkedIn(since).map((p) => p.id)).toEqual(['b', 'a'])
   })
 })
 
@@ -467,5 +530,145 @@ describe('searchPosts paging is never unbounded', () => {
     expect(searchPosts({ pageSize: 0 }).pageSize).toBe(1)
     expect(searchPosts({ pageSize: -10 }).pageSize).toBe(1)
     expect(searchPosts({ page: -3 }).page).toBe(1)
+  })
+})
+
+// FTS5 keyword search (§11.1). The `keywords` filter runs through the posts_fts index, not
+// `content LIKE '%kw%'` — these tests pin the behavioural differences that motivated the change.
+describe('searchPosts — FTS5 keyword matching', () => {
+  it('matches whole words, not substrings', () => {
+    seed([
+      { id: 'real', content: 'Revenue ops and infra hiring' },
+      { id: 'noise1', content: 'The AI stops drifting after a while' },
+      { id: 'noise2', content: 'It loops through every lead' },
+      { id: 'noise3', content: 'Power tops $2.4M this quarter' },
+    ])
+    expect(searchPosts({ keywords: ['ops'] }).posts.map((p) => p.id)).toEqual(['real'])
+  })
+
+  it('matches word forms via the porter stemmer (hire → hiring/hired/hires)', () => {
+    seed([
+      { id: 'a', content: 'We are hiring three engineers' },
+      { id: 'b', content: 'I hired my first PM last month' },
+      { id: 'c', content: 'Gardening tips for spring' },
+    ])
+    expect(searchPosts({ keywords: ['hire'] }).posts.map((p) => p.id).sort()).toEqual(['a', 'b'])
+  })
+
+  it("OR's terms by default (match='any' preserves the original keyword contract)", () => {
+    seed([
+      { id: 'a', content: 'cold email works' },
+      { id: 'b', content: 'outbound is dead' },
+      { id: 'c', content: 'gardening tips' },
+    ])
+    expect(searchPosts({ keywords: ['cold', 'outbound'] }).posts.map((p) => p.id).sort()).toEqual(['a', 'b'])
+    expect(searchPosts({ keywords: ['cold', 'outbound'], match: 'any' }).posts).toHaveLength(2)
+  })
+
+  it("AND's terms under match='all' — the precision win over OR'd LIKEs", () => {
+    seed([
+      { id: 'all3', content: 'my cold outbound email system' },
+      { id: 'two', content: 'cold email, but the inbound motion is what worked' },
+      { id: 'one', content: 'just an email' },
+    ])
+    expect(
+      searchPosts({ keywords: ['cold', 'outbound', 'email'], match: 'all' }).posts.map((p) => p.id),
+    ).toEqual(['all3'])
+  })
+
+  it('treats a multi-word term as a phrase (adjacency required)', () => {
+    seed([
+      { id: 'phrase', content: 'my cold outbound system' },
+      { id: 'apart', content: 'outbound is cold this quarter' },
+    ])
+    expect(searchPosts({ keywords: ['cold outbound'] }).posts.map((p) => p.id)).toEqual(['phrase'])
+  })
+
+  it("sort='relevance' orders by bm25 — the best match first, not the newest", () => {
+    seed([
+      { id: 'passing', content: 'a long post about many things, agents get one mention here', posted_at: '2026-06-03T00:00:00.000Z' },
+      { id: 'dense', content: 'agents agents agents', posted_at: '2026-06-01T00:00:00.000Z' },
+    ])
+    expect(searchPosts({ keywords: ['agents'], sort: 'relevance' }).posts.map((p) => p.id)).toEqual([
+      'dense',
+      'passing',
+    ])
+    // Without a keyword there is nothing to score against: fall back to the default ordering.
+    seed([{ id: 'newest', posted_at: '2026-09-01T00:00:00.000Z' }])
+    expect(searchPosts({ sort: 'relevance' }).posts[0]!.id).toBe('newest')
+  })
+
+  it('returns nothing (not everything) when a keyword has no indexable token', () => {
+    seed([{ id: 'a' }, { id: 'b' }])
+    const res = searchPosts({ keywords: ['!!!'] })
+    expect(res.posts).toEqual([])
+    expect(res.total).toBe(0)
+  })
+
+  it('treats FTS5 operator syntax in a keyword as literal text instead of throwing', () => {
+    seed([{ id: 'a', content: 'ai agents' }])
+    for (const kw of ['NOT ai', 'ai OR', '"', 'col:val', '*', 'ai AND (']) {
+      expect(() => searchPosts({ keywords: [kw] })).not.toThrow()
+    }
+  })
+
+  it('composes with the other filters and with pagination', () => {
+    seed([
+      { id: 'a', content: 'ai agents', platform: 'linkedin', likes: 100 },
+      { id: 'b', content: 'ai agents', platform: 'twitter', likes: 100 },
+      { id: 'c', content: 'ai agents', platform: 'linkedin', likes: 1 },
+      { id: 'd', content: 'gardening', platform: 'linkedin', likes: 100 },
+    ])
+    const res = searchPosts({ keywords: ['agents'], platforms: ['linkedin'], minLikes: 50 })
+    expect(res.posts.map((p) => p.id)).toEqual(['a'])
+    expect(res.total).toBe(1)
+
+    const paged = searchPosts({ keywords: ['agents'], pageSize: 2 })
+    expect(paged.posts).toHaveLength(2)
+    expect(paged.total).toBe(3)
+    expect(paged.hasMore).toBe(true)
+  })
+
+  it('applies the keyword filter to the author dropdown and the clustering candidate set', () => {
+    seed([
+      { id: 'a', content: 'ai agents', author_id: 'jane', embedding: vectorToBlob([1, 0, 0, 0]) },
+      { id: 'b', content: 'gardening tips', author_id: 'joe', embedding: vectorToBlob([0, 1, 0, 0]) },
+    ])
+    expect(getAvailableAuthors({ keywords: ['agents'] }).map((a) => a.author_id)).toEqual(['jane'])
+    expect(getCandidatesForClustering({ keywords: ['agents'] }, false).map((p) => p.id)).toEqual(['a'])
+  })
+})
+
+describe('posts_fts index synchronisation', () => {
+  it('indexes a post on insert', () => {
+    seed([{ id: 'a', content: 'brand new post about agents' }])
+    expect(searchPosts({ keywords: ['agents'] }).posts.map((p) => p.id)).toEqual(['a'])
+  })
+
+  it('drops a post from the index when the row is deleted', () => {
+    seed([{ id: 'a', content: 'ai agents' }])
+    getDb().prepare('DELETE FROM posts WHERE id = ?').run('a')
+    expect(searchPosts({ keywords: ['agents'] }).posts).toEqual([])
+  })
+
+  it('re-indexes when content is updated', () => {
+    seed([{ id: 'a', content: 'ai agents' }])
+    getDb().prepare('UPDATE posts SET content = ? WHERE id = ?').run('gardening tips', 'a')
+    expect(searchPosts({ keywords: ['agents'] }).posts).toEqual([])
+    expect(searchPosts({ keywords: ['gardening'] }).posts.map((p) => p.id)).toEqual(['a'])
+  })
+
+  it('survives a null-content post (nothing to index, no crash)', () => {
+    seed([{ id: 'a', content: null }, { id: 'b', content: 'ai agents' }])
+    expect(searchPosts({ keywords: ['agents'] }).posts.map((p) => p.id)).toEqual(['b'])
+    expect(() => getDb().prepare('DELETE FROM posts WHERE id = ?').run('a')).not.toThrow()
+  })
+
+  it('is not disturbed by enrichment writes that leave content alone', () => {
+    seed([{ id: 'a', content: 'ai agents' }])
+    setEmbedding('a', vectorToBlob([1, 0, 0, 0]), '2026-06-01T00:00:00.000Z')
+    updateXFactor('a', { weighted_score: 10, creator_baseline: 2, x_factor: 5 })
+    setTranscript('a', 'spoken words')
+    expect(searchPosts({ keywords: ['agents'] }).posts.map((p) => p.id)).toEqual(['a'])
   })
 })

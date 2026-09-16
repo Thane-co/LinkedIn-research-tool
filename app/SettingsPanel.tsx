@@ -18,18 +18,20 @@ const SECRET_FIELDS = [
   { key: 'apify_api_token', label: 'Apify API token' },
   { key: 'voyage_api_key', label: 'Voyage API key' },
   { key: 'anthropic_api_key', label: 'Anthropic API key (optional)' },
-  { key: 'assemblyai_api_key', label: 'AssemblyAI API key (ig-compare tab only)' },
+  { key: 'assemblyai_api_key', label: 'AssemblyAI API key (Instagram video transcripts)' },
 ] as const
 // Each actor field links to its Apify store page so you can open the actor you're pointing at.
-const ACTOR_FIELDS = [
+const ACTOR_FIELDS: readonly { key: string; label: string; href?: string }[] = [
   { key: 'apify_keyword_actor_id', label: 'LinkedIn keyword actor', href: 'https://apify.com/harvestapi/linkedin-post-search' },
   { key: 'apify_profile_actor_id', label: 'LinkedIn profile-posts actor', href: 'https://apify.com/harvestapi/linkedin-profile-posts' },
   { key: 'apify_profile_detail_actor_id', label: 'LinkedIn profile-details actor', href: 'https://apify.com/harvestapi/linkedin-profile-scraper' },
   { key: 'apify_tweet_actor_id', label: 'Twitter actor', href: 'https://apify.com/apidojo/tweet-scraper' },
   { key: 'apify_substack_actor_id', label: 'Substack actor', href: 'https://apify.com/brilliant_gum/substack-insights-scraper' },
   { key: 'apify_instagram_actor_id', label: 'Instagram actor', href: 'https://apify.com/apify/instagram-post-scraper' },
-  { key: 'apify_instagram_transcript_actor_id', label: 'Instagram transcript actor', href: 'https://apify.com/crawlerbros/instagram-transcript-scraper' },
-] as const
+  { key: 'apify_comments_actor_id', label: 'LinkedIn comments actor (your own posts only)', href: 'https://apify.com/harvestapi/linkedin-post-comments' },
+  // §23: plain config rather than an actor, edited the same way. Comment scraping is refused until set.
+  { key: 'own_linkedin_author_id', label: 'Your LinkedIn author id (the slug in linkedin.com/in/…)' },
+]
 const PROVIDERS = ['apify', 'voyage', 'anthropic', 'assemblyai'] as const
 
 export function SettingsPanel({ view, onSaved }: { view: SettingsView; onSaved?: (v: SettingsView) => void }) {
@@ -108,9 +110,11 @@ export function SettingsPanel({ view, onSaved }: { view: SettingsView; onSaved?:
         <label key={f.key} className="settings__field">
           <span className="settings__field-head">
             {f.label}
-            <a className="settings__actor-link" href={f.href} target="_blank" rel="noreferrer">
-              view actor ↗
-            </a>
+            {f.href && (
+              <a className="settings__actor-link" href={f.href} target="_blank" rel="noreferrer">
+                view actor ↗
+              </a>
+            )}
           </span>
           <input
             value={actors[f.key] ?? ''}
