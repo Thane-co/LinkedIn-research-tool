@@ -38,6 +38,10 @@ const post = (over: Partial<PostRow>): PostRow =>
     weighted_score: null,
     creator_baseline: null,
     x_factor: null,
+    x_score: null,
+    creator_spread: null,
+    x_provisional: 0,
+    measured_at: null,
     ...over,
   }) as PostRow
 

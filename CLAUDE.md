@@ -70,8 +70,11 @@ Wire these into `package.json` when scaffolding if the names differ. Work **bott
 These are load-bearing decisions. **Changing any of them requires updating its test AND the PRD in
 the same change.**
 
-- **X-factor:** `weighted_score = likes·1 + comments·3 + shares·5`; baseline = mean weighted_score
-  of the same author's posts in the prior **30 days**; needs **≥3** priors or x_factor is null.
+- **X-factor v2:** `weighted_score = likes·1 + comments·3 + shares·5`; `x_score` is a robust z
+  (log score, median level over the last 10 mature posts within 60d, MAD spread of detrended
+  residuals over 180d, floor 0.15); `x_factor` is the ratio to the median level; posts under 3
+  days at last measurement are excluded from baselines and flagged provisional; under 1 day
+  they are not scored. Recompute runs after every scrape AND every engagement refresh.
 - **Match on `author_id` (clean slug/handle), NEVER on `author_url`** — profile urls carry
   `?miniProfileUrn=…` query strings that break equality.
 - **Derive a post's `id` from the canonical URL's activity URN, NOT `raw.id`** — `raw.id` can be a

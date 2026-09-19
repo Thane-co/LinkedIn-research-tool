@@ -144,7 +144,7 @@ export interface GrowthEntry {
   stale: boolean
   approx: boolean // the gain spans longer than the requested window (see WindowGrowth.approx)
   posts: number // posts published inside the window
-  best_x_factor: number | null
+  best_x_score: number | null // best robust rarity z among the window's mature posts (§8)
 }
 
 export interface RankedEntry extends GrowthEntry {

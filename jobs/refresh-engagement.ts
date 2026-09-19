@@ -18,6 +18,7 @@ import { ENGAGEMENT_REFRESH_TIMEFRAME, POST_SCRAPE_COST_PER_POST } from '@/lib/c
 import { listCreators } from '@/lib/db/creators.repo'
 import { recordPostSnapshots, type NewPostSnapshot } from '@/lib/db/post-snapshots.repo'
 import { findExistingIds, insertPosts, refreshEngagement } from '@/lib/db/posts.repo'
+import { recomputeXFactors } from '@/jobs/scrape'
 import { mapApifyPostToRow } from '@/lib/pure/mappers'
 import { getSettings } from '@/lib/settings'
 import type { ApifyPost, PostRow } from '@/lib/types'
@@ -30,6 +31,8 @@ export interface RefreshResult {
   posts_returned: number
   snapshots: number
   new_posts: number
+  /** §8: posts whose x-factor was recomputed after the refresh (scores go stale otherwise). */
+  rescored: number
   cost_usd: number
   errors: string[]
 }
@@ -66,10 +69,15 @@ export async function refreshRecentEngagement(
     posts_returned: 0,
     snapshots: 0,
     new_posts: 0,
+    rescored: 0,
     cost_usd: 0,
     errors: [],
   }
   if (roster.length === 0) return result
+
+  // Authors whose posts had counts refreshed or new posts inserted this run — the exact scope the
+  // x-factor recompute must cover, since their weighted_score (and thus their baselines) just moved.
+  const touchedAuthors = new Set<string>()
 
   for (const batch of chunk(roster, batchSize)) {
     let items: ApifyPost[]
@@ -121,12 +129,26 @@ export async function refreshRecentEngagement(
       shares: r.shares,
     }))
     result.snapshots += recordPostSnapshots(snapshots)
+
+    // Track the authors this batch touched so the recompute below is scoped to them, not the whole DB.
+    for (const r of rows) if (r.author_id) touchedAuthors.add(r.author_id)
+  }
+
+  // The bug this fixes: refreshEngagement rewrites likes/comments/shares in place but never recomputes
+  // scores, so x_factor/x_score on refreshed posts go stale. Recompute now, scoped to the authors just
+  // touched. Non-fatal: a recompute failure must not lose the day's snapshots (already committed above).
+  try {
+    result.rescored = recomputeXFactors([...touchedAuthors])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`refreshRecentEngagement: x-factor recompute failed — ${message}`)
+    result.errors.push(`recompute: ${message}`)
   }
 
   result.cost_usd = result.posts_returned * POST_SCRAPE_COST_PER_POST
   console.log(
     `refreshRecentEngagement: ${capturedOn} — ${result.posts_returned} posts read, ` +
-      `${result.snapshots} snapshots, ${result.new_posts} new, ` +
+      `${result.snapshots} snapshots, ${result.new_posts} new, ${result.rescored} rescored, ` +
       `$${result.cost_usd.toFixed(2)}, ${result.errors.length} batch error(s)`,
   )
   return result

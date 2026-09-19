@@ -23,6 +23,11 @@ export interface PostCardPost {
   comments: number
   shares: number
   x_factor: number | null
+  x_score?: number | null
+  x_provisional?: number // 0 | 1
+  creator_baseline?: number | null // creator LEVEL in raw weighted points (§8)
+  creator_spread?: number | null // spread in log units (§8)
+  measured_at?: string | null // instant the current counts came from (§8)
   scrape_source: 'keyword' | 'creator' | 'both' | null
   image_url: string | null
   media?: PostMedia | null
@@ -123,6 +128,23 @@ function PostMediaView({ post }: { post: PostCardPost }) {
 
 const TRUNCATE_AT = 280
 
+/**
+ * The x-factor badge's hover text (§8). A scored post reads e.g. "3.4σ above their usual post
+ * (level 458 pts, spread 0.31). Measured day 5." A provisional post explains why there is no number.
+ */
+function badgeTooltip(post: PostCardPost, provisional: 0 | 1, ageDays: number | null): string | undefined {
+  if (post.x_score == null) {
+    if (provisional === 1) return 'Counts still growing; rescored daily until day 3.'
+    return undefined
+  }
+  const level = post.creator_baseline != null ? Math.round(post.creator_baseline) : null
+  const spread = post.creator_spread != null ? post.creator_spread.toFixed(2) : null
+  const detail = level != null && spread != null ? ` (level ${level} pts, spread ${spread})` : ''
+  const measured = ageDays != null ? ` Measured day ${ageDays}.` : ''
+  const growing = provisional === 1 ? ' Counts still growing; rescored daily until day 3.' : ''
+  return `${post.x_score.toFixed(1)}σ above their usual post${detail}.${measured}${growing}`
+}
+
 /** "2026-06-26" → "Jun 26, 2026" (deterministic, locale-independent). */
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 function formatDate(iso: string | null | undefined): string {
@@ -146,7 +168,14 @@ export function PostCard({ post, ownAuthorId }: { post: PostCardPost; ownAuthorI
   const transcriptLong = transcript.length > TRUNCATE_AT
   const transcriptShown = transcriptLong && !transcriptExpanded ? `${transcript.slice(0, TRUNCATE_AT)}…` : transcript
 
-  const badge = xFactorBadge(post.x_factor)
+  // §8: integer age (days) at last measurement, for the "(day N)" tag and the tooltip.
+  const measurementAge =
+    post.measured_at && post.posted_at
+      ? Math.floor((Date.parse(post.measured_at) - Date.parse(post.posted_at)) / 86_400_000)
+      : null
+  const provisional: 0 | 1 = post.x_provisional === 1 ? 1 : 0
+  const badge = xFactorBadge(post.x_score ?? null, post.x_factor, provisional, measurementAge)
+  const badgeTitle = badgeTooltip(post, provisional, measurementAge)
   const isOwnPost = post.platform === 'linkedin' && Boolean(ownAuthor) && post.author_id === ownAuthor
 
   return (
@@ -218,6 +247,7 @@ export function PostCard({ post, ownAuthorId }: { post: PostCardPost; ownAuthorI
               className={`badge badge--xfactor badge--${badge.tone}`}
               data-testid="xfactor-badge"
               data-tone={badge.tone}
+              {...(badgeTitle ? { title: badgeTitle } : {})}
             >
               {badge.emoji}
               {badge.label}

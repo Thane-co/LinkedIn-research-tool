@@ -18,6 +18,11 @@ export interface PostFilters {
   minLikes?: number
   minShares?: number
   minXFactor?: number
+  /** §8: floor on the robust rarity z (x_score). NULL x_score is excluded by the comparison. */
+  minXScore?: number
+  /** §8: include posts still inside the 3-day maturity window (x_provisional = 1). Default true;
+   *  when false, only mature posts (x_provisional = 0) are returned. */
+  includeProvisional?: boolean
   timeframe?: Timeframe
   dateFrom?: string
   dateTo?: string
@@ -31,7 +36,7 @@ const POST_COLUMNS = `
   id, platform, url, content, author_name, author_url, author_id, author_type,
   likes, shares, comments, posted_at, scraped_at, is_repost, scrape_source, market, media, transcript,
   embedding, image_url, image_description, image_embedding, embedded_at,
-  weighted_score, creator_baseline, x_factor, raw_data
+  weighted_score, creator_baseline, x_factor, x_score, creator_spread, x_provisional, measured_at, raw_data
 `
 
 // `posts` and `posts_fts` BOTH have a `content` column, so a bare `content` is ambiguous once the
@@ -49,7 +54,7 @@ const INSERT_SQL = `INSERT OR IGNORE INTO posts (${POST_COLUMNS.replace(/\s+/g, 
   @id, @platform, @url, @content, @author_name, @author_url, @author_id, @author_type,
   @likes, @shares, @comments, @posted_at, @scraped_at, @is_repost, @scrape_source, @market, @media, @transcript,
   @embedding, @image_url, @image_description, @image_embedding, @embedded_at,
-  @weighted_score, @creator_baseline, @x_factor, @raw_data
+  @weighted_score, @creator_baseline, @x_factor, @x_score, @creator_spread, @x_provisional, @measured_at, @raw_data
 )`
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -90,7 +95,7 @@ export function refreshEngagement(
 
 /**
  * LinkedIn posts from the recent window for the viral rescan summary (spec: content loop). Best
- * x_factor first (SQLite sorts NULLs last under DESC), likes breaking ties, so a fresh scan surfaces
+ * x_score first (SQLite sorts NULLs last under DESC), likes breaking ties, so a fresh scan surfaces
  * the current top of the last few days. `since` is an ISO-8601 instant (posted_at >= since).
  */
 export function getRecentViralLinkedIn(since: string): PostRow[] {
@@ -98,7 +103,7 @@ export function getRecentViralLinkedIn(since: string): PostRow[] {
     .prepare(
       `SELECT ${POST_COLUMNS} FROM posts
        WHERE platform = 'linkedin' AND posted_at >= ?
-       ORDER BY x_factor DESC, likes DESC`,
+       ORDER BY x_score DESC, likes DESC`,
     )
     .all(since) as PostRow[]
 }
@@ -173,6 +178,14 @@ function buildWhere(filters: PostFilters): {
     conditions.push('x_factor >= ?') // NULL x_factor is excluded by the comparison
     params.push(filters.minXFactor)
   }
+  if (filters.minXScore !== undefined) {
+    conditions.push('x_score >= ?') // NULL x_score is excluded by the comparison
+    params.push(filters.minXScore)
+  }
+  if (filters.includeProvisional === false) {
+    // Hide posts still inside the 3-day maturity window; their numbers are still climbing.
+    conditions.push('x_provisional = 0')
+  }
   if (filters.market) {
     conditions.push('market = ?')
     params.push(filters.market)
@@ -205,6 +218,8 @@ function orderBy(sort: SortMode | undefined, fts: boolean): string {
       return 'ORDER BY posts.likes DESC'
     case 'xfactor':
       return 'ORDER BY posts.x_factor DESC' // SQLite sorts NULLs last under DESC
+    case 'xscore':
+      return 'ORDER BY posts.x_score DESC' // §8: rarity z; SQLite sorts NULLs last under DESC
     case 'relevance':
       // bm25 is negative and MORE negative = better, so ascending is best-first. posted_at breaks
       // ties so the ordering is stable rather than whatever the index happens to yield.
@@ -435,9 +450,32 @@ export function getCorpusStats(): CorpusStats {
   }
 }
 
+/**
+ * An author's full post history, oldest first, with `measured_at` resolved to the instant the current
+ * counts actually came from: MAX(scraped_at, latest post_snapshots.captured_at). The refresh job
+ * rewrites counts in place but never touches scraped_at (§22), so scraped_at alone understates how
+ * current a post's numbers are — and x-factor maturity is judged from measured_at (§8). Done in SQL
+ * with a grouped LEFT JOIN, never a per-post snapshot lookup in a loop.
+ */
 export function getAuthorHistory(authorId: string): PostRow[] {
+  // Every posts column EXCEPT measured_at, which is replaced by the computed MAX below.
+  const cols = POST_COLUMNS.split(',')
+    .map((c) => c.trim())
+    .filter((c) => c && c !== 'measured_at')
+    .map((c) => `p.${c}`)
+    .join(', ')
   return getDb()
-    .prepare(`SELECT ${POST_COLUMNS} FROM posts WHERE author_id = ? ORDER BY posted_at ASC`)
+    .prepare(
+      `SELECT ${cols},
+              MAX(p.scraped_at, COALESCE(s.last_captured_at, p.scraped_at)) AS measured_at
+       FROM posts p
+       LEFT JOIN (
+         SELECT post_id, MAX(captured_at) AS last_captured_at
+         FROM post_snapshots GROUP BY post_id
+       ) s ON s.post_id = p.id
+       WHERE p.author_id = ?
+       ORDER BY p.posted_at ASC`,
+    )
     .all(authorId) as PostRow[]
 }
 
@@ -555,13 +593,31 @@ export function setTranscript(id: string, transcript: string): void {
 
 export function updateXFactor(
   id: string,
-  values: { weighted_score: number; creator_baseline: number | null; x_factor: number | null },
+  values: {
+    weighted_score: number
+    creator_baseline: number | null // the creator LEVEL in raw weighted points (§8)
+    creator_spread: number | null
+    x_factor: number | null
+    x_score: number | null
+    x_provisional: 0 | 1
+    measured_at: string | null
+  },
 ): void {
   getDb()
     .prepare(
-      'UPDATE posts SET weighted_score = ?, creator_baseline = ?, x_factor = ? WHERE id = ?',
+      `UPDATE posts SET weighted_score = ?, creator_baseline = ?, creator_spread = ?,
+         x_factor = ?, x_score = ?, x_provisional = ?, measured_at = ? WHERE id = ?`,
     )
-    .run(values.weighted_score, values.creator_baseline, values.x_factor, id)
+    .run(
+      values.weighted_score,
+      values.creator_baseline,
+      values.creator_spread,
+      values.x_factor,
+      values.x_score,
+      values.x_provisional,
+      values.measured_at,
+      id,
+    )
 }
 
 // A post still needs enrichment when it's missing its text embedding, OR it has a thumbnail

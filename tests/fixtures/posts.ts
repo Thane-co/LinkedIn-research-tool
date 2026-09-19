@@ -34,6 +34,10 @@ export function makePostRow(overrides: Partial<PostRow> = {}): PostRow {
     weighted_score: null,
     creator_baseline: null,
     x_factor: null,
+    x_score: null,
+    creator_spread: null,
+    x_provisional: 0,
+    measured_at: null,
     raw_data: null,
     ...overrides,
   }

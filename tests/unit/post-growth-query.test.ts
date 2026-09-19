@@ -22,7 +22,7 @@ const post = (id: string, author_id: string, posted_at: string): PostRow =>
     likes: 0, shares: 0, comments: 0, posted_at, scraped_at: posted_at,
     is_repost: 0, scrape_source: 'creator', market: 'ai', media: null, transcript: null,
     embedding: null, image_url: null, image_description: null, image_embedding: null,
-    embedded_at: null, weighted_score: 0, creator_baseline: null, x_factor: null, raw_data: null,
+    embedded_at: null, weighted_score: 0, creator_baseline: null, x_factor: null, x_score: null, creator_spread: null, x_provisional: 0, measured_at: null, raw_data: null,
   }) as unknown as PostRow
 
 const cap = (post_id: string, day: string, likes: number) =>

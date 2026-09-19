@@ -11,6 +11,8 @@ const baseFilters = (over: Partial<Filters> = {}): Filters => ({
   minLikes: 0,
   minShares: 0,
   minXFactor: 0,
+  minXScore: 0,
+  hideProvisional: false,
   timeframe: 'week',
   sort: 'recent',
   match: 'any',

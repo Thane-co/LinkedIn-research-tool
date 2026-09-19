@@ -127,7 +127,7 @@ function Board({
                     <Sparkline points={r.spark} />
                   </td>
                   <td>{r.posts}</td>
-                  <td>{r.best_x_factor === null ? '—' : `${r.best_x_factor.toFixed(1)}x`}</td>
+                  <td>{r.best_x_score === null ? '—' : `${r.best_x_score.toFixed(1)}σ`}</td>
                 </tr>
               )
             })}

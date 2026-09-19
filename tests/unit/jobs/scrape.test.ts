@@ -313,18 +313,27 @@ describe('runScrape', () => {
   })
 
   it('recomputes x-factor scoped to the authors it just inserted, leaving others untouched', async () => {
-    // jane already has 3 in-window priors (weighted 10 each) → baseline forms for a new post.
+    // jane has 20 mature priors, each weighted 10 (likes=10), spaced 3 days apart inside the last
+    // 60 days — enough for both the level (>=5) and spread (>=15) windows. All identical, so the level
+    // is 10 raw points and the spread hits the floor. A new 900-point post then scores deterministically.
+    const janePriors = Array.from({ length: 20 }, (_, i) =>
+      makePostRow({
+        id: `j${i}`,
+        author_id: 'jane',
+        posted_at: new Date(Date.parse('2026-06-24T00:00:00.000Z') - i * 3 * 86_400_000).toISOString(),
+        scraped_at: '2026-06-28T00:00:00.000Z', // measured well after each posting -> mature
+        likes: 10,
+      }),
+    )
     insertPosts([
-      makePostRow({ id: 'j1', author_id: 'jane', posted_at: '2026-06-10T00:00:00.000Z', likes: 10 }),
-      makePostRow({ id: 'j2', author_id: 'jane', posted_at: '2026-06-15T00:00:00.000Z', likes: 10 }),
-      makePostRow({ id: 'j3', author_id: 'jane', posted_at: '2026-06-18T00:00:00.000Z', likes: 10 }),
-      // bob is NOT scraped this run → must stay untouched (null score)
+      ...janePriors,
+      // bob is NOT scraped this run -> must stay untouched (null score)
       makePostRow({ id: 'bob1', author_id: 'bob', posted_at: '2026-06-01T00:00:00.000Z', likes: 5 }),
     ])
 
     mockRunActor.mockImplementation(async (_a, input: object) =>
       'searchQueries' in input
-        ? [liItem('900', { engagement: { likes: 100, comments: 0, shares: 0 }, postedAt: { date: '2026-06-25T00:00:00.000Z' } })]
+        ? [liItem('900', { engagement: { likes: 900, comments: 0, shares: 0 }, postedAt: { date: '2026-06-25T00:00:00.000Z' } })]
         : [],
     )
 
@@ -338,31 +347,53 @@ describe('runScrape', () => {
 
     const jane = getAuthorHistory('jane')
     const fresh = jane.find((p) => p.id === '900')!
-    expect(fresh.weighted_score).toBe(100)
-    expect(fresh.creator_baseline).toBe(10) // mean of the 3 priors
-    expect(fresh.x_factor).toBe(10) // 100 / 10
+    expect(fresh.weighted_score).toBe(900)
+    expect(fresh.creator_baseline).toBeCloseTo(10, 6) // level in raw points = exp(lg(10)) - 1
+    expect(fresh.x_factor).toBeCloseTo(90, 4) // 900 / 10
+    expect(fresh.x_score).not.toBeNull()
+    expect(fresh.x_score!).toBeGreaterThan(2)
+    expect(fresh.x_provisional).toBe(0) // posted 2026-06-25, measured months later -> mature
 
     const bob = getAuthorHistory('bob')[0]!
     expect(bob.weighted_score).toBeNull() // untouched — not in the affected set
-    expect(bob.x_factor).toBeNull()
+    expect(bob.x_score).toBeNull()
   })
 })
 
 describe('recomputeXFactors', () => {
+  /** N mature priors for one author, each weighted `weight`, spaced 3 days apart before `end`. */
+  const maturePriors = (authorId: string, n: number, weight: number, end = '2026-06-24T00:00:00.000Z') =>
+    Array.from({ length: n }, (_, i) =>
+      makePostRow({
+        id: `${authorId}-${i}`,
+        author_id: authorId,
+        author_url: `https://li/in/${authorId}?miniProfileUrn=${i}`, // deliberately-varying url
+        posted_at: new Date(Date.parse(end) - i * 3 * 86_400_000).toISOString(),
+        scraped_at: '2026-06-28T00:00:00.000Z',
+        likes: weight,
+      }),
+    )
+
   it('groups an author by author_id even when author_url differs (miniProfileUrn query strings)', () => {
     insertPosts([
-      makePostRow({ id: 'p1', author_id: 'jane', author_url: 'https://li/in/jane?miniProfileUrn=A', posted_at: '2026-06-10T00:00:00.000Z', likes: 10 }),
-      makePostRow({ id: 'p2', author_id: 'jane', author_url: 'https://li/in/jane?miniProfileUrn=B', posted_at: '2026-06-15T00:00:00.000Z', likes: 10 }),
-      makePostRow({ id: 'p3', author_id: 'jane', author_url: 'https://li/in/jane?miniProfileUrn=C', posted_at: '2026-06-18T00:00:00.000Z', likes: 10 }),
-      makePostRow({ id: 'p4', author_id: 'jane', author_url: 'https://li/in/jane?miniProfileUrn=D', posted_at: '2026-06-25T00:00:00.000Z', likes: 100 }),
+      ...maturePriors('jane', 20, 10),
+      makePostRow({
+        id: 'p4',
+        author_id: 'jane',
+        author_url: 'https://li/in/jane?miniProfileUrn=Z',
+        posted_at: '2026-06-25T00:00:00.000Z',
+        scraped_at: '2026-06-30T00:00:00.000Z',
+        likes: 900,
+      }),
     ])
 
     recomputeXFactors(['jane'])
 
     const p4 = searchPosts({}).posts.find((p) => p.id === 'p4')!
-    // If it had matched on author_url the 3 priors wouldn't group and x_factor would be null.
-    expect(p4.creator_baseline).toBe(10)
-    expect(p4.x_factor).toBe(10)
+    // If it had matched on author_url the 20 priors wouldn't group and the score would be null.
+    expect(p4.creator_baseline).toBeCloseTo(10, 6)
+    expect(p4.x_factor).toBeCloseTo(90, 4)
+    expect(p4.x_score).not.toBeNull()
   })
 
   it('writes weighted_score for every post of the affected author', () => {

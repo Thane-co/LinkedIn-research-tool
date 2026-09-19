@@ -33,7 +33,7 @@ import {
   mapApifySubstackToRow,
   mapApifyTweetToRow,
 } from '@/lib/pure/mappers'
-import { computeXFactor, weightedScore } from '@/lib/pure/x-factor'
+import { computeXFactor, weightedScore, type ScoredPrior } from '@/lib/pure/x-factor'
 import { getSettings } from '@/lib/settings'
 import { fetchSubstackNoteContent } from '@/lib/substack'
 import type {
@@ -342,29 +342,62 @@ export async function runScrape(opts: RunScrapeOptions): Promise<ScrapeStats> {
 }
 
 /**
- * Recompute weighted_score / creator_baseline / x_factor for the given authors only (PRD §8.4).
- * Match strictly on author_id (clean slug/handle), never on author_url (which may carry
- * ?miniProfileUrn=… query strings that break equality). Non-fatal per author.
+ * Recompute the x-factor v2 scores for the given authors only (PRD §8.4), scoped to the author_ids
+ * that just changed. Match strictly on author_id (clean slug/handle), never on author_url (which may
+ * carry ?miniProfileUrn=… query strings that break equality). Non-fatal per author.
  */
-export function recomputeXFactors(authorIds: string[]): void {
+export function recomputeXFactors(authorIds: string[]): number {
   const distinct = [...new Set(authorIds.filter((a): a is string => !!a))]
+  let rescored = 0
   for (const authorId of distinct) {
     try {
-      // getAuthorHistory matches strictly on author_id (never author_url) — the original bug fix.
+      // getAuthorHistory matches strictly on author_id (never author_url) and resolves each post's
+      // measured_at to MAX(scraped_at, latest snapshot). The pure fn re-applies every window rule.
       const scored = getAuthorHistory(authorId).map((post) => ({ post, ws: weightedScore(post) }))
       for (const { post, ws } of scored) {
         if (!post.posted_at) {
-          updateXFactor(post.id, { weighted_score: ws, creator_baseline: null, x_factor: null })
+          updateXFactor(post.id, {
+            weighted_score: ws,
+            creator_baseline: null,
+            creator_spread: null,
+            x_factor: null,
+            x_score: null,
+            x_provisional: 0,
+            measured_at: post.measured_at,
+          })
+          rescored++
           continue
         }
-        const priors = scored
+        const priors: ScoredPrior[] = scored
           .filter((s) => s.post.id !== post.id && s.post.posted_at)
-          .map((s) => ({ weighted_score: s.ws, posted_at: s.post.posted_at as string }))
-        const { creator_baseline, x_factor } = computeXFactor({ weighted_score: ws, posted_at: post.posted_at }, priors)
-        updateXFactor(post.id, { weighted_score: ws, creator_baseline, x_factor })
+          .map((s) => ({
+            weighted_score: s.ws,
+            posted_at: s.post.posted_at as string,
+            measured_at: s.post.measured_at,
+          }))
+        const result = computeXFactor(
+          {
+            weighted_score: ws,
+            posted_at: post.posted_at,
+            measured_at: post.measured_at,
+            scraped_at: post.scraped_at,
+          },
+          priors,
+        )
+        updateXFactor(post.id, {
+          weighted_score: ws,
+          creator_baseline: result.creator_level,
+          creator_spread: result.creator_spread,
+          x_factor: result.x_factor,
+          x_score: result.x_score,
+          x_provisional: result.x_provisional,
+          measured_at: post.measured_at,
+        })
+        rescored++
       }
     } catch (err) {
       console.error(`recomputeXFactors: failed for author ${authorId}:`, (err as Error).message)
     }
   }
+  return rescored
 }

@@ -33,6 +33,12 @@ export function seedSettingsDefaults(db: Database.Database): void {
 const ADDITIVE_COLUMNS: { table: string; column: string; type: string }[] = [
   { table: 'posts', column: 'media', type: 'TEXT' }, // §10.3.1 post media
   { table: 'posts', column: 'transcript', type: 'TEXT' }, // §18 video transcript
+  // §8 x-factor v2 — nullable, idempotent. `creator_baseline` is REPURPOSED (not added) to hold the
+  // median-based creator level; the columns below are new.
+  { table: 'posts', column: 'x_score', type: 'REAL' }, // the rarity z
+  { table: 'posts', column: 'creator_spread', type: 'REAL' }, // spread in log units (debugging + tooltip)
+  { table: 'posts', column: 'x_provisional', type: 'INTEGER NOT NULL DEFAULT 0' },
+  { table: 'posts', column: 'measured_at', type: 'TEXT' }, // ISO instant the current counts came from
   { table: 'creators', column: 'persona', type: 'TEXT' }, // §17.2 cross-platform persona key
   // §21.8 follower-tracking opt-in. NOT NULL DEFAULT 0 is safe to add to an existing table: SQLite
   // backfills every existing row with the default, which is exactly the intent (opt-in, not opt-out).
@@ -104,6 +110,9 @@ export function migrate(db?: Database.Database): void {
   // Indexes on additive columns run here (not in schema.sql) so the column is guaranteed to exist on
   // a legacy db that predates it (§17.2 persona).
   target.exec('CREATE INDEX IF NOT EXISTS creators_persona_idx ON creators(persona)')
+  // §8 x-factor v2 index on an additive column — created here (not schema.sql) so it also lands on a
+  // legacy db whose posts table predates the x_score column.
+  target.exec('CREATE INDEX IF NOT EXISTS posts_xscore_idx ON posts(x_score DESC)')
   applyVersionedMigrations(target)
   seedSettingsDefaults(target)
 }

@@ -49,12 +49,12 @@ describe('scrape-viral-window run()', () => {
     })
   })
 
-  it('returns recent LinkedIn posts, best x_factor first, excluding old and non-LinkedIn', async () => {
+  it('returns recent LinkedIn posts, best x_score first, excluding old and non-LinkedIn', async () => {
     insertPosts([
-      makePostRow({ id: 'a', platform: 'linkedin', posted_at: isoAgo(2 * HOUR), x_factor: 4, likes: 100 }),
-      makePostRow({ id: 'b', platform: 'linkedin', posted_at: isoAgo(3 * HOUR), x_factor: 2, likes: 900 }),
-      makePostRow({ id: 'old', platform: 'linkedin', posted_at: isoAgo(5 * DAY), x_factor: 9, likes: 9 }),
-      makePostRow({ id: 'tw', platform: 'twitter', posted_at: isoAgo(1 * HOUR), x_factor: 9, likes: 9 }),
+      makePostRow({ id: 'a', platform: 'linkedin', posted_at: isoAgo(2 * HOUR), x_score: 4, likes: 100 }),
+      makePostRow({ id: 'b', platform: 'linkedin', posted_at: isoAgo(3 * HOUR), x_score: 2, likes: 900 }),
+      makePostRow({ id: 'old', platform: 'linkedin', posted_at: isoAgo(5 * DAY), x_score: 9, likes: 9 }),
+      makePostRow({ id: 'tw', platform: 'twitter', posted_at: isoAgo(1 * HOUR), x_score: 9, likes: 9 }),
     ])
     const { posts } = await run()
     expect(posts.map((p) => p.id)).toEqual(['a', 'b'])

@@ -30,6 +30,10 @@ const blankEnrichment = {
   weighted_score: null,
   creator_baseline: null,
   x_factor: null,
+  x_score: null,
+  creator_spread: null,
+  x_provisional: 0,
+  measured_at: null,
 } as const
 
 /** LinkedIn: map a raw Apify post to a PostRow. Throws if no canonical id can be derived. */

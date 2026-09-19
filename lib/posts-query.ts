@@ -41,7 +41,7 @@ import type {
 
 export const VALID_PLATFORMS: readonly Platform[] = ['linkedin', 'twitter', 'substack', 'instagram']
 export const TIMEFRAMES: readonly Timeframe[] = ['all', '24h', '3d', 'week', 'month', '3months', 'custom']
-export const SORTS: readonly SortMode[] = ['recent', 'likes', 'xfactor', 'relevance']
+export const SORTS: readonly SortMode[] = ['recent', 'likes', 'xfactor', 'xscore', 'relevance']
 export const MATCH_MODES: readonly MatchMode[] = ['any', 'all']
 
 /** A post as it goes over the wire: vectors and the raw scraped payload are dropped, `media` parsed. */
@@ -103,6 +103,9 @@ export function parsePostFilters(sp: URLSearchParams): PostFilters {
     minLikes: num('minLikes'),
     minShares: num('minShares'),
     minXFactor: num('minXFactor'),
+    minXScore: num('minXScore'),
+    // §8: default true (show everything). Only an explicit includeProvisional=false hides growing posts.
+    includeProvisional: sp.get('includeProvisional') === 'false' ? false : undefined,
     timeframe,
     dateFrom,
     dateTo,
@@ -151,7 +154,7 @@ export function collectFilterWarnings(sp: URLSearchParams): string[] {
     }
   }
 
-  for (const key of ['minLikes', 'minShares', 'minXFactor', 'page', 'pageSize', 'imageThreshold', 'textThreshold']) {
+  for (const key of ['minLikes', 'minShares', 'minXFactor', 'minXScore', 'page', 'pageSize', 'imageThreshold', 'textThreshold']) {
     const raw = sp.get(key)
     if (raw !== null && raw !== '' && !Number.isFinite(Number(raw))) {
       warnings.push(`Ignored non-numeric ${key}='${raw}'.`)
@@ -202,6 +205,8 @@ function hasHardFilters(f: PostFilters): boolean {
       f.minLikes ||
       f.minShares ||
       f.minXFactor !== undefined ||
+      f.minXScore !== undefined ||
+      f.includeProvisional === false ||
       f.market ||
       (f.timeframe && f.timeframe !== 'all'),
   )
@@ -214,6 +219,8 @@ function applySort(posts: PostRow[], sort: SortMode | undefined): PostRow[] {
       return [...posts].sort((a, b) => b.likes - a.likes)
     case 'xfactor':
       return [...posts].sort((a, b) => (b.x_factor ?? -Infinity) - (a.x_factor ?? -Infinity))
+    case 'xscore':
+      return [...posts].sort((a, b) => (b.x_score ?? -Infinity) - (a.x_score ?? -Infinity))
     case 'recent':
       return [...posts].sort((a, b) => (b.posted_at ?? '').localeCompare(a.posted_at ?? ''))
     default:

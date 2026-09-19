@@ -19,7 +19,7 @@ interface PickRow {
   tracked: boolean
   followers: number | null
   posts_30d: number
-  best_x_factor: number | null
+  best_x_score: number | null
 }
 
 interface Roster {
@@ -137,7 +137,7 @@ export function TrackedCreatorPicker({ onChanged }: { onChanged: () => void }): 
               <span className="picker__stats">
                 {c.followers === null ? 'no count yet' : `${nf.format(c.followers)} followers`} ·{' '}
                 {c.posts_30d} posts/30d
-                {c.best_x_factor !== null && ` · best ${c.best_x_factor.toFixed(1)}x`}
+                {c.best_x_score !== null && ` · best ${c.best_x_score.toFixed(1)}σ`}
               </span>
             </li>
           ))}

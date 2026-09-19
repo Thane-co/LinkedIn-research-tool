@@ -32,7 +32,13 @@ const cap = (author_id: string, day: string, followers: number) =>
     source: 'profile-actor',
   })
 
-const post = (id: string, author_id: string, posted_at: string, x_factor: number | null = null): PostRow =>
+const post = (
+  id: string,
+  author_id: string,
+  posted_at: string,
+  x_score: number | null = null,
+  x_provisional = 0,
+): PostRow =>
   ({
     id,
     platform: 'linkedin',
@@ -59,7 +65,11 @@ const post = (id: string, author_id: string, posted_at: string, x_factor: number
     embedded_at: null,
     weighted_score: 10,
     creator_baseline: null,
-    x_factor,
+    x_factor: null,
+    x_score,
+    creator_spread: null,
+    x_provisional,
+    measured_at: null,
     raw_data: null,
   }) as unknown as PostRow
 
@@ -97,18 +107,19 @@ describe('buildLeaderboard', () => {
     expect(board.absolute.map((r) => r.author_id)).toEqual(['big', 'small'])
   })
 
-  it('counts the posts published inside the window and carries the best x-factor', () => {
+  it('counts the posts published inside the window and carries the best x-score (provisional excluded)', () => {
     creator('jane')
     cap('jane', '2026-09-08', 20_000)
     cap('jane', '2026-09-09', 20_500)
     insertPosts([
       post('1', 'jane', '2026-09-09T08:00:00.000Z', 1.2),
       post('2', 'jane', '2026-09-09T12:00:00.000Z', 4.4),
+      post('4', 'jane', '2026-09-09T13:00:00.000Z', 9.9, 1), // provisional -> excluded from best
       post('3', 'jane', '2026-08-01T12:00:00.000Z', 9.9), // outside the window
     ])
 
     const [jane] = buildLeaderboard({ windowDays: 1, asOf: '2026-09-09' }).absolute
-    expect(jane).toMatchObject({ posts: 2, best_x_factor: 4.4 })
+    expect(jane).toMatchObject({ posts: 3, best_x_score: 4.4 })
   })
 
   it('defaults asOf to the newest captured day so the board is never blank on a missed run', () => {

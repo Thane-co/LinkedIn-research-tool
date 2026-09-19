@@ -154,7 +154,7 @@ describe('rankLeaderboard', () => {
     stale: false,
     approx: false,
     posts: 0,
-    best_x_factor: null,
+    best_x_score: null,
   })
 
   it('ranks the absolute board by followers gained, biggest first', () => {

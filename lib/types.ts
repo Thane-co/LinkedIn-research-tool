@@ -8,8 +8,9 @@ export type JobStatus = 'running' | 'succeeded' | 'failed'
 export type AuthorType = 'profile' | 'company' | 'verified'
 export type Timeframe = 'all' | '24h' | '3d' | 'week' | 'month' | '3months' | 'custom'
 // 'relevance' = FTS5 bm25 over the keyword MATCH; it needs keywords, and falls back to 'recent'
-// without them (§11.1).
-export type SortMode = 'recent' | 'likes' | 'xfactor' | 'relevance'
+// without them (§11.1). 'xscore' sorts by the robust rarity z (§8); 'xfactor' is kept for API
+// back-compat and maps to the same x-factor UI option.
+export type SortMode = 'recent' | 'likes' | 'xfactor' | 'xscore' | 'relevance'
 // How multiple keyword terms combine: 'any' OR's them (default), 'all' AND's them (§11.1).
 export type MatchMode = 'any' | 'all'
 
@@ -44,8 +45,16 @@ export interface PostRow {
   embedded_at: string | null
 
   weighted_score: number | null
+  // §8 x-factor v2. `creator_baseline` now holds the median-based creator LEVEL in raw weighted
+  // points (repurposed from the old 30-day mean). `x_factor` is the ratio to that level; `x_score`
+  // is the robust rarity z; `creator_spread` is the MAD spread in log units; `x_provisional` flags a
+  // post still inside the 3-day maturity window; `measured_at` is the instant its counts came from.
   creator_baseline: number | null
   x_factor: number | null
+  x_score: number | null
+  creator_spread: number | null
+  x_provisional: number // 0 | 1
+  measured_at: string | null
 
   raw_data: string | null
 }

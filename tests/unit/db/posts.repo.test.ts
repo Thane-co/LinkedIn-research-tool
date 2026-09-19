@@ -20,6 +20,7 @@ import {
   updateXFactor,
 } from '@/lib/db/posts.repo'
 import { upsertCreator } from '@/lib/db/creators.repo'
+import { recordPostSnapshots } from '@/lib/db/post-snapshots.repo'
 import { vectorToBlob } from '@/lib/pure/vector-blob'
 import { makePostRow } from '@/tests/fixtures/posts'
 import type { PostRow } from '@/lib/types'
@@ -106,24 +107,24 @@ describe('refreshEngagement', () => {
 })
 
 describe('getRecentViralLinkedIn', () => {
-  it('returns recent LinkedIn posts, best x_factor first then likes, nulls last', () => {
+  it('returns recent LinkedIn posts, best x_score first then likes, nulls last', () => {
     const since = isoAgo(72 * HOUR)
     seed([
-      { id: 'top', platform: 'linkedin', posted_at: isoAgo(1 * HOUR), x_factor: 4, likes: 100 },
-      { id: 'mid', platform: 'linkedin', posted_at: isoAgo(2 * HOUR), x_factor: 2, likes: 900 },
-      { id: 'nullhi', platform: 'linkedin', posted_at: isoAgo(3 * HOUR), x_factor: null, likes: 500 },
-      { id: 'nulllo', platform: 'linkedin', posted_at: isoAgo(4 * HOUR), x_factor: null, likes: 50 },
-      { id: 'old', platform: 'linkedin', posted_at: isoAgo(5 * DAY), x_factor: 9, likes: 9 }, // outside 72h
-      { id: 'tw', platform: 'twitter', posted_at: isoAgo(1 * HOUR), x_factor: 9, likes: 9 }, // wrong platform
+      { id: 'top', platform: 'linkedin', posted_at: isoAgo(1 * HOUR), x_score: 4, likes: 100 },
+      { id: 'mid', platform: 'linkedin', posted_at: isoAgo(2 * HOUR), x_score: 2, likes: 900 },
+      { id: 'nullhi', platform: 'linkedin', posted_at: isoAgo(3 * HOUR), x_score: null, likes: 500 },
+      { id: 'nulllo', platform: 'linkedin', posted_at: isoAgo(4 * HOUR), x_score: null, likes: 50 },
+      { id: 'old', platform: 'linkedin', posted_at: isoAgo(5 * DAY), x_score: 9, likes: 9 }, // outside 72h
+      { id: 'tw', platform: 'twitter', posted_at: isoAgo(1 * HOUR), x_score: 9, likes: 9 }, // wrong platform
     ])
     expect(getRecentViralLinkedIn(since).map((p) => p.id)).toEqual(['top', 'mid', 'nullhi', 'nulllo'])
   })
 
-  it('breaks x_factor ties by likes DESC', () => {
+  it('breaks x_score ties by likes DESC', () => {
     const since = isoAgo(72 * HOUR)
     seed([
-      { id: 'a', platform: 'linkedin', posted_at: isoAgo(1 * HOUR), x_factor: 3, likes: 10 },
-      { id: 'b', platform: 'linkedin', posted_at: isoAgo(2 * HOUR), x_factor: 3, likes: 90 },
+      { id: 'a', platform: 'linkedin', posted_at: isoAgo(1 * HOUR), x_score: 3, likes: 10 },
+      { id: 'b', platform: 'linkedin', posted_at: isoAgo(2 * HOUR), x_score: 3, likes: 90 },
     ])
     expect(getRecentViralLinkedIn(since).map((p) => p.id)).toEqual(['b', 'a'])
   })
@@ -197,6 +198,38 @@ describe('searchPosts — filters', () => {
     expect(searchPosts({ minXFactor: 2 }).posts.map((p) => p.id)).toEqual(['a'])
   })
 
+  it('minXScore filters and excludes null x_score', () => {
+    seed([
+      { id: 'a', x_score: 3 },
+      { id: 'b', x_score: 1 },
+      { id: 'c', x_score: null },
+    ])
+    expect(searchPosts({ minXScore: 2 }).posts.map((p) => p.id)).toEqual(['a'])
+  })
+
+  it('includeProvisional=false hides posts still inside the maturity window', () => {
+    seed([
+      { id: 'mature', x_score: 3, x_provisional: 0 },
+      { id: 'growing', x_score: 5, x_provisional: 1 },
+    ])
+    // default (undefined) shows both
+    expect(searchPosts({ sort: 'xscore' }).posts.map((p) => p.id).sort()).toEqual(['growing', 'mature'])
+    // false hides the provisional one
+    expect(searchPosts({ includeProvisional: false }).posts.map((p) => p.id)).toEqual(['mature'])
+  })
+
+  it('minXScore and includeProvisional compose with the other filters', () => {
+    seed([
+      { id: 'keep', platform: 'linkedin', x_score: 3, x_provisional: 0, likes: 100 },
+      { id: 'low', platform: 'linkedin', x_score: 1, x_provisional: 0, likes: 100 }, // below the σ floor
+      { id: 'young', platform: 'linkedin', x_score: 4, x_provisional: 1, likes: 100 }, // still growing
+      { id: 'quiet', platform: 'linkedin', x_score: 3, x_provisional: 0, likes: 5 }, // below the likes floor
+      { id: 'tw', platform: 'twitter', x_score: 9, x_provisional: 0, likes: 100 }, // wrong platform
+    ])
+    const res = searchPosts({ platforms: ['linkedin'], minXScore: 2, includeProvisional: false, minLikes: 50 })
+    expect(res.posts.map((p) => p.id)).toEqual(['keep'])
+  })
+
   it('filters by a preset timeframe (last 24h)', () => {
     seed([
       { id: 'fresh', posted_at: isoAgo(2 * HOUR) },
@@ -246,6 +279,15 @@ describe('searchPosts — sort, pagination, hasMore', () => {
       { id: 'b', x_factor: 4 },
     ])
     expect(searchPosts({ sort: 'xfactor' }).posts.map((p) => p.id)).toEqual(['b', 'a', 'n'])
+  })
+
+  it('sorts by x_score DESC with nulls last', () => {
+    seed([
+      { id: 'a', x_score: 1.5 },
+      { id: 'n', x_score: null },
+      { id: 'b', x_score: 4 },
+    ])
+    expect(searchPosts({ sort: 'xscore' }).posts.map((p) => p.id)).toEqual(['b', 'a', 'n'])
   })
 
   it('paginates and computes hasMore exactly', () => {
@@ -355,17 +397,61 @@ describe('clustering candidates + author history', () => {
     ])
     expect(getAuthorHistory('jane').map((p) => p.id)).toEqual(['a2', 'a1'])
   })
+
+  it('getAuthorHistory resolves measured_at to the latest snapshot captured_at, else scraped_at', () => {
+    seed([
+      { id: 'snap', author_id: 'jane', posted_at: '2026-01-01T00:00:00.000Z', scraped_at: '2026-01-02T00:00:00.000Z' },
+      { id: 'nosnap', author_id: 'jane', posted_at: '2026-01-03T00:00:00.000Z', scraped_at: '2026-01-04T00:00:00.000Z' },
+    ])
+    recordPostSnapshots([
+      { post_id: 'snap', captured_on: '2026-01-05', captured_at: '2026-01-05T00:00:00.000Z', likes: 10, comments: 0, shares: 0 },
+      { post_id: 'snap', captured_on: '2026-01-08', captured_at: '2026-01-08T00:00:00.000Z', likes: 20, comments: 0, shares: 0 },
+    ])
+    const byId = Object.fromEntries(getAuthorHistory('jane').map((p) => [p.id, p.measured_at]))
+    // The post with snapshots reports its LATEST captured_at, not its (older) scraped_at.
+    expect(byId['snap']).toBe('2026-01-08T00:00:00.000Z')
+    // The post with no snapshots falls back to scraped_at.
+    expect(byId['nosnap']).toBe('2026-01-04T00:00:00.000Z')
+  })
+
+  it('getAuthorHistory keeps scraped_at when it is newer than every snapshot', () => {
+    seed([{ id: 'p', author_id: 'jane', posted_at: '2026-01-01T00:00:00.000Z', scraped_at: '2026-02-01T00:00:00.000Z' }])
+    recordPostSnapshots([
+      { post_id: 'p', captured_on: '2026-01-05', captured_at: '2026-01-05T00:00:00.000Z', likes: 1, comments: 0, shares: 0 },
+    ])
+    expect(getAuthorHistory('jane')[0]!.measured_at).toBe('2026-02-01T00:00:00.000Z')
+  })
 })
 
 describe('x-factor + embedding writes', () => {
-  it('updateXFactor writes the three score columns', () => {
+  it('updateXFactor writes every score column', () => {
     seed([{ id: 'a' }])
-    updateXFactor('a', { weighted_score: 42, creator_baseline: 10, x_factor: 4.2 })
+    updateXFactor('a', {
+      weighted_score: 42,
+      creator_baseline: 10,
+      creator_spread: 0.31,
+      x_factor: 4.2,
+      x_score: 3.4,
+      x_provisional: 1,
+      measured_at: '2026-07-05T00:00:00.000Z',
+    })
     const [row] = searchPosts({}).posts
-    expect({ ws: row!.weighted_score, cb: row!.creator_baseline, xf: row!.x_factor }).toEqual({
+    expect({
+      ws: row!.weighted_score,
+      cb: row!.creator_baseline,
+      cs: row!.creator_spread,
+      xf: row!.x_factor,
+      xs: row!.x_score,
+      xp: row!.x_provisional,
+      ma: row!.measured_at,
+    }).toEqual({
       ws: 42,
       cb: 10,
+      cs: 0.31,
       xf: 4.2,
+      xs: 3.4,
+      xp: 1,
+      ma: '2026-07-05T00:00:00.000Z',
     })
   })
 
@@ -667,7 +753,7 @@ describe('posts_fts index synchronisation', () => {
   it('is not disturbed by enrichment writes that leave content alone', () => {
     seed([{ id: 'a', content: 'ai agents' }])
     setEmbedding('a', vectorToBlob([1, 0, 0, 0]), '2026-06-01T00:00:00.000Z')
-    updateXFactor('a', { weighted_score: 10, creator_baseline: 2, x_factor: 5 })
+    updateXFactor('a', { weighted_score: 10, creator_baseline: 2, creator_spread: 0.2, x_factor: 5, x_score: 3, x_provisional: 0, measured_at: '2026-06-05T00:00:00.000Z' })
     setTranscript('a', 'spoken words')
     expect(searchPosts({ keywords: ['agents'] }).posts.map((p) => p.id)).toEqual(['a'])
   })

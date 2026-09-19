@@ -22,7 +22,7 @@ const row = (author_id: string, over: Partial<Leaderboard['absolute'][number]> =
   stale: false,
   approx: false,
   posts: 1,
-  best_x_factor: 3.2,
+  best_x_score: 3.2,
   rank: 1,
   spark: [19_500, 20_000],
   ...over,

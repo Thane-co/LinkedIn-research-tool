@@ -66,7 +66,7 @@ describe('POST /api/post-growth/refresh', () => {
     setSettings({ apify_api_token: 'tok' })
     mockRefresh.mockResolvedValue({
       captured_on: '2026-09-10', creators: 55, posts_returned: 476,
-      snapshots: 476, new_posts: 12, cost_usd: 0.952, errors: [],
+      snapshots: 476, new_posts: 12, rescored: 476, cost_usd: 0.952, errors: [],
     })
     const res = await POST(post())
     expect(res.status).toBe(200)

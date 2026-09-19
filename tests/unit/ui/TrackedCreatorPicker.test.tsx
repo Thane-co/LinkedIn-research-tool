@@ -13,8 +13,8 @@ const mockApiFetch = vi.mocked(apiFetch)
 
 const roster = (over = {}) => ({
   creators: [
-    { id: 'c1', author_id: 'jane', display_name: 'Jane', avatar_url: null, tracked: true, followers: 90_000, posts_30d: 20, best_x_factor: 3.2 },
-    { id: 'c2', author_id: 'bob', display_name: 'Bob', avatar_url: null, tracked: false, followers: 12_000, posts_30d: 4, best_x_factor: 1.1 },
+    { id: 'c1', author_id: 'jane', display_name: 'Jane', avatar_url: null, tracked: true, followers: 90_000, posts_30d: 20, best_x_score: 3.2 },
+    { id: 'c2', author_id: 'bob', display_name: 'Bob', avatar_url: null, tracked: false, followers: 12_000, posts_30d: 4, best_x_score: 1.1 },
   ],
   total: 2,
   tracked_count: 1,

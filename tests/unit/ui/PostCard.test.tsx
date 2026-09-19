@@ -17,6 +17,9 @@ const makePost = (over: Partial<PostCardPost> = {}): PostCardPost => ({
   comments: 8,
   shares: 3,
   x_factor: 3,
+  x_score: 3,
+  x_provisional: 0,
+  measured_at: '2026-07-01T00:00:00.000Z',
   scrape_source: 'both',
   image_url: null,
   media: null,
@@ -111,14 +114,38 @@ describe('PostCard', () => {
     expect(screen.queryByRole('link', { name: /open the original post/i })).not.toBeInTheDocument()
   })
 
-  it('shows a green 🔥 x-factor badge for a viral post and hides it when null', () => {
-    const { rerender } = render(<PostCard post={makePost({ x_factor: 3 })} />)
+  it('shows a green 🔥 x-factor badge for a rare post and hides it when unscored', () => {
+    const { rerender } = render(<PostCard post={makePost({ x_score: 3, x_factor: 3 })} />)
     const badge = screen.getByTestId('xfactor-badge')
     expect(badge).toHaveAttribute('data-tone', 'green')
-    expect(badge).toHaveTextContent('3.0×')
+    expect(badge).toHaveTextContent('3.0σ · 3.0×')
 
-    rerender(<PostCard post={makePost({ x_factor: null })} />)
+    // No score and not provisional -> no badge at all.
+    rerender(<PostCard post={makePost({ x_score: null, x_factor: null, x_provisional: 0 })} />)
     expect(screen.queryByTestId('xfactor-badge')).not.toBeInTheDocument()
+  })
+
+  it('shows a hollow "new" pill for a provisional post with no score', () => {
+    render(<PostCard post={makePost({ x_score: null, x_factor: null, x_provisional: 1 })} />)
+    const badge = screen.getByTestId('xfactor-badge')
+    expect(badge).toHaveAttribute('data-tone', 'pending')
+    expect(badge).toHaveTextContent('new')
+  })
+
+  it('appends "(day N)" for a provisional post that already has a score', () => {
+    // posted 2026-06-26, measured 2026-06-28 -> day 2, still inside the 3-day window.
+    render(
+      <PostCard
+        post={makePost({
+          x_score: 2.6,
+          x_factor: 3.1,
+          x_provisional: 1,
+          posted_at: '2026-06-26T00:00:00.000Z',
+          measured_at: '2026-06-28T00:00:00.000Z',
+        })}
+      />,
+    )
+    expect(screen.getByTestId('xfactor-badge')).toHaveTextContent('2.6σ · 3.1× (day 2)')
   })
 
   it('truncates long content and expands on demand', async () => {

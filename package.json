@@ -26,6 +26,7 @@
     "followers:snapshot": "node scripts/snapshot-followers.mjs",
     "creators:prune": "node scripts/prune-creators.mjs",
     "scan:viral": "tsx scripts/scrape-viral-window.ts",
+    "xfactor:backfill": "tsx scripts/recompute-xfactor.ts",
     "post-loop:daily": "tsx scripts/daily-post-performance.ts",
     "posts:refresh": "node scripts/refresh-engagement.mjs"
   },

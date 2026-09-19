@@ -33,14 +33,16 @@ const BASELINE_SLACK_DAYS = 30
 
 interface PostWindowStats {
   posts: number
-  best_x_factor: number | null
+  best_x_score: number | null
 }
 
-/** Post count + best x-factor per author inside [from, to], in one grouped query rather than N. */
+/** Post count + best x_score per author inside [from, to], in one grouped query rather than N.
+ *  Provisional posts are excluded from the best-score so a still-growing post never tops the board. */
 function postStatsByAuthor(fromDay: string, toDay: string): Map<string, PostWindowStats> {
   const rows = getDb()
     .prepare(
-      `SELECT author_id, COUNT(*) AS posts, MAX(x_factor) AS best_x_factor
+      `SELECT author_id, COUNT(*) AS posts,
+              MAX(CASE WHEN x_provisional = 0 THEN x_score END) AS best_x_score
        FROM posts
        WHERE platform = 'linkedin' AND author_id IS NOT NULL
          AND posted_at >= ? AND posted_at < ?
@@ -49,10 +51,10 @@ function postStatsByAuthor(fromDay: string, toDay: string): Map<string, PostWind
     .all(`${fromDay}T00:00:00.000Z`, `${toDay}T23:59:59.999Z`) as {
     author_id: string
     posts: number
-    best_x_factor: number | null
+    best_x_score: number | null
   }[]
 
-  return new Map(rows.map((r) => [r.author_id, { posts: r.posts, best_x_factor: r.best_x_factor }]))
+  return new Map(rows.map((r) => [r.author_id, { posts: r.posts, best_x_score: r.best_x_score }]))
 }
 
 /** A ranked row plus the follower series behind it, so the board draws sparklines from one call. */
@@ -107,7 +109,7 @@ export function buildLeaderboard({
       stale: growth?.stale ?? false,
       approx: growth?.approx ?? false,
       posts: stat?.posts ?? 0,
-      best_x_factor: stat?.best_x_factor ?? null,
+      best_x_score: stat?.best_x_score ?? null,
     }
   })
 

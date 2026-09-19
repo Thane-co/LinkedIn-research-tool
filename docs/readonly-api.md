@@ -96,7 +96,9 @@ Base url: `http://127.0.0.1:3100/api/v1`
 | `authors` | Comma-separated `author_id` values (clean slugs/handles from `/authors`). |
 | `market` | Exact market bucket, e.g. `ai`. |
 | `minLikes`, `minShares` | Numeric floors. |
-| `minXFactor` | Floor on the overperformance multiple. Posts with no baseline yet are excluded. |
+| `minXFactor` | Floor on the overperformance ratio (`x_factor`). Posts with no level yet are excluded. |
+| `minXScore` | Floor on the rarity z (`x_score`, σ above the author's usual). `1.5` notable, `2.5` rare. Posts with no score are excluded. |
+| `includeProvisional` | `false` hides posts still inside the 3-day maturity window (whose counts are still climbing). Default: shows them. |
 | `timeframe` | `all` (default), `24h`, `3d`, `week`, `month`, `3months`, `custom`. |
 | `dateFrom`, `dateTo` | ISO timestamps. Supplying either implies `timeframe=custom`, so a date range works on its own. An explicit non-`custom` `timeframe` wins and you get a warning. |
 
@@ -104,7 +106,7 @@ Base url: `http://127.0.0.1:3100/api/v1`
 
 | Param | Notes |
 | --- | --- |
-| `sort` | `recent` (default), `likes`, `xfactor`. |
+| `sort` | `recent` (default), `likes`, `xscore` (rarity z, the outlier sort), `xfactor` (ratio, back-compat), `relevance`. |
 | `page` | 1-based. Default 1. |
 | `pageSize` | Default 50, max 200. |
 
@@ -161,20 +163,32 @@ Grouping (`groupByImage` or `discoverTrends`):
 A serialized post carries `id, platform, url, content, author_name, author_url, author_id,
 author_type, likes, shares, comments, posted_at, scraped_at, is_repost, scrape_source, market,
 media, transcript, image_url, image_description, embedded_at, weighted_score, creator_baseline,
-x_factor`. Embedding vectors and the raw scraped payload are **never** serialized.
+x_factor, x_score, creator_spread, x_provisional, measured_at`. Embedding vectors and the raw
+scraped payload are **never** serialized.
 
-### Reading `x_factor`
+### Reading `x_score` and `x_factor`
 
-`x_factor` is how far a post beat its **own author's** recent baseline:
+`x_score` is a **robust z-score**: how many standard deviations above (or below) their usual post
+this one is, measured against the author's own recent history.
 
 ```
 weighted_score = likes·1 + comments·3 + shares·5
-x_factor       = weighted_score ÷ (that author's mean weighted_score over the prior 30 days)
+level          = median( ln(1 + weighted_score) ) over the author's last 10 MATURE posts within 60 days
+spread         = MAD of detrended residuals over the author's mature posts in the last 180 days (floor 0.15, log units)
+x_score        = ( ln(1 + weighted_score) - level ) / spread
+creator_baseline = exp(level) - 1        # the author's current typical post, in raw weighted points
+x_factor       = weighted_score / creator_baseline   # the plain "how much bigger" ratio
 ```
 
-It needs at least 3 prior posts from that author, so it is `null` on new authors. `x_factor: 14.5`
-means the post did 14.5x that account's normal engagement, which is a much better outlier signal
-than raw likes: it does not just resurface accounts with big followings.
+Only **mature** posts (last measured at least 3 days after posting) feed the level and spread. A post
+still inside that window carries `x_provisional: 1`; a post under 1 day old at measurement is not
+scored (`x_score: null`). `measured_at` is the instant the current counts came from (the latest
+snapshot, else `scraped_at`). Both scores are `null` until the author has enough history.
+
+Read `x_score` as the outlier signal (`1.5` notable, `2.5` rare) and sort by `sort=xscore`. `x_score:
+3.4` means the post is 3.4σ above that account's usual — a much cleaner "is this a hit" signal than
+raw likes, which just resurfaces big accounts. `minXScore` filters on it; `minXFactor` filters on the
+ratio; `includeProvisional=false` hides posts still growing.
 
 ---
 
@@ -188,8 +202,8 @@ AUTH="Authorization: Bearer $TOKEN"
 # What's in here?
 curl -s -H "$AUTH" "$BASE/stats"
 
-# Outliers: LinkedIn posts about agents that beat their author's baseline 5x, last month
-curl -s -H "$AUTH" "$BASE/posts?q=agent&platform=linkedin&minXFactor=5&timeframe=month&sort=xfactor"
+# Outliers: LinkedIn posts about agents that are 2.5σ+ above their author's usual, last month
+curl -s -H "$AUTH" "$BASE/posts?q=agent&platform=linkedin&minXScore=2.5&timeframe=month&sort=xscore"
 
 # What visual formats are working right now
 curl -s -H "$AUTH" "$BASE/posts?groupByImage=true&platform=linkedin&minLikes=200"
@@ -198,7 +212,7 @@ curl -s -H "$AUTH" "$BASE/posts?groupByImage=true&platform=linkedin&minLikes=200
 curl -s -H "$AUTH" "$BASE/posts?discoverTrends=true&timeframe=week&minLikes=100"
 
 # One creator's best posts
-curl -s -H "$AUTH" "$BASE/posts?authors=thejustinwelsh&sort=xfactor&pageSize=20"
+curl -s -H "$AUTH" "$BASE/posts?authors=thejustinwelsh&sort=xscore&pageSize=20"
 
 # Who is in the corpus
 curl -s -H "$AUTH" "$BASE/authors?platform=substack"

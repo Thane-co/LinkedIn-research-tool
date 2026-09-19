@@ -28,9 +28,10 @@ export async function GET(): Promise<NextResponse> {
               (SELECT COUNT(*) FROM posts p
                 WHERE p.platform = 'linkedin' AND p.author_id = c.author_id
                   AND p.posted_at >= date('now', '-30 day')) AS posts_30d,
-              (SELECT MAX(p.x_factor) FROM posts p
+              (SELECT MAX(p.x_score) FROM posts p
                 WHERE p.platform = 'linkedin' AND p.author_id = c.author_id
-                  AND p.posted_at >= date('now', '-90 day')) AS best_x_factor
+                  AND p.x_provisional = 0
+                  AND p.posted_at >= date('now', '-90 day')) AS best_x_score
        FROM creators c
        WHERE c.platform = 'linkedin'
        ORDER BY followers DESC NULLS LAST, c.display_name COLLATE NOCASE ASC`,
@@ -43,7 +44,7 @@ export async function GET(): Promise<NextResponse> {
     track_followers: number
     followers: number | null
     posts_30d: number
-    best_x_factor: number | null
+    best_x_score: number | null
   }[]
 
   const rows = creators.map(({ track_followers, ...c }) => ({ ...c, tracked: track_followers === 1 }))

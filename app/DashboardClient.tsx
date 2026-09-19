@@ -40,6 +40,8 @@ export const DEFAULT_FILTERS: Filters = {
   minLikes: 0,
   minShares: 0,
   minXFactor: 0,
+  minXScore: 0,
+  hideProvisional: false,
   timeframe: 'all', // landing view: latest posts across every creator, no date filter
   market: '',
   sort: 'recent',
@@ -61,6 +63,8 @@ export function toQuery(f: Filters): string {
   if (f.minLikes) p.set('minLikes', String(f.minLikes))
   if (f.minShares) p.set('minShares', String(f.minShares))
   if (f.minXFactor) p.set('minXFactor', String(f.minXFactor))
+  if (f.minXScore) p.set('minXScore', String(f.minXScore))
+  if (f.hideProvisional) p.set('includeProvisional', 'false')
   p.set('timeframe', f.timeframe)
   if (f.timeframe === 'custom') {
     if (f.dateFrom) p.set('dateFrom', f.dateFrom)

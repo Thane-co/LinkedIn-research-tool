@@ -6,10 +6,24 @@
 // The values below are load-bearing invariants (CLAUDE.md). Changing any of them requires
 // updating its test AND the PRD in the same change.
 
-// --- X-factor (PRD §8.1) ---------------------------------------------------
+// --- X-factor v2 (PRD §8) --------------------------------------------------
+// Robust, maturity-aware z-score on logged scores. The creator's current LEVEL and their normal
+// SWING are estimated separately, and only MATURE posts (whose numbers have stopped growing) feed
+// either. Changing any of these requires updating its test AND the PRD in the same change.
 export const WEIGHTS = { likes: 1, comments: 3, shares: 5 } as const
-export const MIN_SAMPLE_SIZE = 3 // min prior posts to form a baseline
-export const BASELINE_WINDOW_DAYS = 30 // lookback window for baseline
+export const MATURITY_DAYS = 3 // a post is mature once its LAST measurement was taken >= 3 days after posting
+export const PROVISIONAL_MIN_DAYS = 1 // under 1 day of age at measurement: no score at all
+export const LEVEL_POSTS = 10 // the current level is the median of the last N mature posts
+export const LEVEL_WINDOW_DAYS = 60 // ...looking back at most this far
+export const MIN_LEVEL_POSTS = 5 // fewer mature posts than this -> no level -> no score
+export const SPREAD_WINDOW_DAYS = 180 // the normal swing is measured over this window
+export const MIN_SPREAD_POSTS = 15 // fewer mature posts in the spread window -> no score
+export const MIN_RESIDUALS = 8 // fewer detrended residuals than this -> no score
+export const SPREAD_FLOOR = 0.15 // in log units; stops near-identical histories from exploding the score
+export const MAD_SCALE = 1.4826 // MAD -> sigma for a normal distribution
+export const RARE_Z = 2.5 // badge: rare (green, fire)
+export const NOTABLE_Z = 1.5 // badge: notable (amber)
+export const LOW_Z = -1.5 // badge: underperformed (red)
 
 // --- Grouping / clustering (PRD §9.2) --------------------------------------
 export const IMAGE_SIMILARITY_THRESHOLD = 0.8 // image grouping

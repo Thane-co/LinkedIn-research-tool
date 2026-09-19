@@ -38,10 +38,14 @@ CREATE TABLE IF NOT EXISTS posts (
   image_embedding   BLOB,                      -- Float32[1024] of image
   embedded_at       TEXT,                      -- ISO when text embedding written
 
-  -- x-factor (nullable until recompute runs)
+  -- x-factor v2 (nullable until recompute runs) — PRD §8
   weighted_score    REAL,                      -- likes*1 + comments*3 + shares*5
-  creator_baseline  REAL,                      -- avg weighted_score of author's prior 30d posts
-  x_factor          REAL,                      -- weighted_score / creator_baseline
+  creator_baseline  REAL,                      -- creator LEVEL: median lg-score of the last 10 mature posts within 60d, in raw weighted points (exp(level)-1)
+  x_factor          REAL,                      -- weighted_score / creator_baseline (ratio to the current median level)
+  x_score           REAL,                      -- robust rarity z: (lg(weighted_score) - level) / spread
+  creator_spread    REAL,                      -- MAD spread in LOG units (debugging + tooltip)
+  x_provisional     INTEGER NOT NULL DEFAULT 0, -- 1 while the post is under 3 days old at last measurement
+  measured_at       TEXT,                      -- ISO instant of the measurement the current counts come from
 
   raw_data          TEXT                       -- JSON.stringify of full Apify item
 );
@@ -50,6 +54,8 @@ CREATE INDEX IF NOT EXISTS posts_posted_at_idx        ON posts(posted_at DESC);
 CREATE INDEX IF NOT EXISTS posts_likes_idx            ON posts(likes DESC);
 CREATE INDEX IF NOT EXISTS posts_author_posted_idx    ON posts(author_id, posted_at DESC);
 CREATE INDEX IF NOT EXISTS posts_xfactor_idx          ON posts(x_factor DESC);
+-- posts_xscore_idx is created in db.ts migrate() (after the additive x_score column is guaranteed to
+-- exist on a legacy posts table), not here — schema.sql runs before the ADDITIVE_COLUMNS ALTERs.
 CREATE INDEX IF NOT EXISTS posts_platform_idx         ON posts(platform);
 CREATE UNIQUE INDEX IF NOT EXISTS posts_url_unique_idx ON posts(url) WHERE url IS NOT NULL;
 CREATE INDEX IF NOT EXISTS posts_unembedded_idx       ON posts(embedded_at) WHERE embedding IS NULL;

@@ -104,3 +104,19 @@ Growth tab, under the champion leaderboard.
 
 The curve needs two captures. After the first run every post shows dashes — that is correct, not a
 bug. Day-2 and day-3 columns fill in as posts age through the window.
+
+## The refresh rescores the x-factor
+
+Since x-factor v2 (PRD §8), every daily refresh also **recomputes the x-factor** of the posts it
+touched. This matters because a post keeps growing for about 3 days after it goes up: measured from
+`post_snapshots`, a post under 1 day old still has a median 65% to come (90th percentile: 375%), 1–2
+days old 11%, 2–3 days 5%, and by 3 days and older only ~2% (≈0 by day 5). So the x-factor treats a
+post as **mature** only once its last measurement was taken ≥3 days after posting; younger posts are
+kept out of every creator's baseline and flagged provisional, and a post under 1 day old is not
+scored at all.
+
+The refresh is what moves a post across that line. `refreshEngagement` rewrites the counts in place
+but never touches `scraped_at`, so the x-factor reads the post's true "as of" time from the latest
+`post_snapshots.captured_at` instead. Each refresh therefore rescores the post against its now-current
+numbers AND lets it mature as its snapshots age. Without the recompute, a refreshed post would keep a
+stale score forever.

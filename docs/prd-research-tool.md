@@ -570,55 +570,104 @@ Tests: round-trip equality (within Float32 epsilon), wrong-length throws, null �
 
 ---
 
-## 8. X-factor specification (exact)
+## 8. X-factor specification (exact) — v2, maturity-aware robust z-score
+
+The x-factor is a **robust z-score on logged scores**, with the creator's current **level** and
+their normal **swing** estimated separately, and with only **mature** posts allowed into either.
+This replaces the v1 mean-ratio, which a tiny baseline inflated, a prior hit hid the next hit, and
+an immature post polluted.
 
 ### 8.1 Constants (do not change without updating tests)
 ```ts
 export const WEIGHTS = { likes: 1, comments: 3, shares: 5 } as const
-export const MIN_SAMPLE_SIZE = 3          // min prior posts to form a baseline
-export const BASELINE_WINDOW_DAYS = 30    // lookback window for baseline
+export const MATURITY_DAYS = 3        // a post is mature once its LAST measurement was taken >= 3 days after posting
+export const PROVISIONAL_MIN_DAYS = 1 // under 1 day of age at measurement: no score at all
+export const LEVEL_POSTS = 10         // the current level is the median of the last N mature posts
+export const LEVEL_WINDOW_DAYS = 60   // ...looking back at most this far
+export const MIN_LEVEL_POSTS = 5      // fewer mature posts than this -> no level -> no score
+export const SPREAD_WINDOW_DAYS = 180 // the normal swing is measured over this window
+export const MIN_SPREAD_POSTS = 15    // fewer mature posts in the spread window -> no score
+export const MIN_RESIDUALS = 8        // fewer detrended residuals than this -> no score
+export const SPREAD_FLOOR = 0.15      // in log units; stops near-identical histories from exploding the score
+export const MAD_SCALE = 1.4826       // MAD -> sigma for a normal distribution
+export const RARE_Z = 2.5             // badge: rare (green, fire)
+export const NOTABLE_Z = 1.5          // badge: notable (amber)
+export const LOW_Z = -1.5             // badge: underperformed (red)
 ```
 
-### 8.2 Weighted score (pure)
+Let `lg(x) = ln(1 + x)`.
+
+### 8.2 Weighted score (pure) — unchanged
 ```ts
 weighted_score = likes * 1 + comments * 3 + shares * 5
 ```
 
-### 8.3 Baseline & x-factor (pure)
-For a post `P` by author `A` posted at time `T`:
-1. Collect all **other** posts by `A` with `posted_at` in the **open** interval `(T - 30d, T)` —
-   i.e. `T - 30d < posted_at < T`. **Both edges are exclusive:** a post dated exactly 30 days
-   before `T` is **excluded** (the boundary is tested explicitly — see §12 Layer 0).
-2. If fewer than `MIN_SAMPLE_SIZE` (3) such posts exist → `creator_baseline = null`,
-   `x_factor = null`.
-3. Else `creator_baseline = mean(weighted_score of those prior posts)`.
-4. If `creator_baseline` is `0` or `null` → `x_factor = null`; else
-   `x_factor = weighted_score(P) / creator_baseline`.
+### 8.3 Definitions (exact)
 
-Pure signature:
+**Measurement time.** `measured_at(P)` = the latest `captured_at` in `post_snapshots` for P if any,
+else `P.scraped_at`. (The refresh job rewrites counts in place but never touches `scraped_at`, so
+`scraped_at` alone understates how current a post's numbers are — §22.)
+`age_at_measurement(P) = measured_at(P) - posted_at(P)` in days.
+
+**Mature.** `age_at_measurement(P) >= MATURITY_DAYS`.
+
+For a post P by author A posted at T, using only A's **other** posts with `posted_at < T` (strict)
+that are mature and have a non-null `posted_at`:
+
+**Level.** Take the mature priors with `posted_at > T - LEVEL_WINDOW_DAYS`, order by `posted_at`,
+keep the last `LEVEL_POSTS`. If fewer than `MIN_LEVEL_POSTS` -> no score.
+`level = median(lg(weighted_score))` over them.
+
+**Spread.** Take the mature priors with `posted_at > T - SPREAD_WINDOW_DAYS`, ordered by `posted_at`
+ascending as list S. If `|S| < MIN_SPREAD_POSTS` -> no score. For each index `i >= LEVEL_POSTS`,
+`residual_i = lg(S[i]) - median(lg(S[i-LEVEL_POSTS .. i-1]))`. This detrends the history so a creator
+whose audience grew is not a permanent outlier against their smaller past self. If fewer than
+`MIN_RESIDUALS` residuals -> no score.
+`spread = max(MAD_SCALE * median(|residual - median(residual)|), SPREAD_FLOOR)`.
+
+Every window edge is **strict on both sides**, as in v1.
+
+**Scores.**
+- `x_score = (lg(weighted_score(P)) - level) / spread` (the rarity, in sigmas)
+- `creator_level = exp(level) - 1` (the current typical post, in raw weighted points; stored in
+  `creator_baseline`)
+- `x_factor = weighted_score(P) / creator_level` (how much bigger; null if `creator_level <= 0`)
+
+**Provisional.**
+- `age_at_measurement(P) < PROVISIONAL_MIN_DAYS` -> `x_score = null`, `x_factor = null`,
+  `x_provisional = 1`. Do not show a number; it will be rescored after tomorrow's refresh.
+- `PROVISIONAL_MIN_DAYS <= age < MATURITY_DAYS` -> compute both, `x_provisional = 1`.
+- otherwise `x_provisional = 0`.
+- A post with no score for lack of history has `x_provisional = 0` and null scores.
+
+Do **not** project a young post's final value from a growth multiplier. The interquartile range of
+what is still to come at day 1 runs from 1.3x to 2.4x; a projected number would look confident and be
+wrong.
+
+Pure signature (`lib/pure/x-factor.ts`; `median`, `mad`, `lg` are exported, tested helpers):
 ```ts
-function computeXFactor(
-  post: { weighted_score: number; posted_at: string },
-  priorPosts: { weighted_score: number; posted_at: string }[]  // same author, pre-filtered to window
-): { creator_baseline: number | null; x_factor: number | null }
+export interface ScoredPrior { weighted_score: number; posted_at: string; measured_at: string | null }
+export function isMature(post: { posted_at: string; measured_at: string | null; scraped_at: string }, nowIso?: string): boolean
+export function computeXFactor(
+  post: { weighted_score: number; posted_at: string; measured_at: string | null; scraped_at: string },
+  priors: ScoredPrior[],   // same author; the function re-applies every window/maturity rule itself
+): { creator_level: number | null; creator_spread: number | null; x_score: number | null; x_factor: number | null; x_provisional: 0 | 1 }
 ```
 
 ### 8.4 Recompute algorithm (Layer 3, `recomputeXFactors`)
-Triggered after every scrape, scoped to the **author_ids that just changed** (not the whole
-DB):
-1. Collect the distinct `author_id`s among newly-inserted posts.
-2. For each such `author_id`, load **all** that author's posts from the DB ordered by
-   `posted_at` (uses `posts_author_posted_idx`).
-3. For each post by that author, compute `weighted_score`, then the window baseline & x-factor
-   per §8.3, and `UPDATE` `weighted_score`, `creator_baseline`, `x_factor`.
+Triggered after every scrape **AND** after every engagement refresh (§22), scoped to the
+**author_ids that just changed** (not the whole DB):
+1. Collect the distinct `author_id`s among the posts just inserted or refreshed.
+2. For each such `author_id`, load **all** that author's posts via `getAuthorHistory`, which resolves
+   each post's `measured_at = MAX(scraped_at, latest post_snapshots.captured_at)` in SQL.
+3. For each post, compute `weighted_score`, then the level/spread/x_score/x_factor/x_provisional per
+   §8.3, and `UPDATE` `weighted_score`, `creator_baseline (= creator_level)`, `creator_spread`,
+   `x_factor`, `x_score`, `x_provisional`, `measured_at`.
 4. **Match strictly on `author_id`** (clean slug/handle), **never on `author_url`** — profile urls
    may carry `?miniProfileUrn=…` query strings that break equality, so matching on the url would
    scatter one author's history across several "authors" and corrupt every baseline.
-5. Non-fatal: log errors, never let recompute failure abort the scrape.
-
-> Optional optimization: you could update only the most-recent 30d of an author's posts while using
-> older ones purely as baseline contributors. For a local single-user DB this is unnecessary —
-> recomputing all of an author's posts is simpler. Keep it simple unless perf bites.
+5. Non-fatal: log errors, never let a recompute failure abort the scrape or lose a refresh's
+   snapshots.
 
 ---
 
@@ -1660,6 +1709,12 @@ the only way to "lose" keys.)
   there is no `node-cron` or "scrape weekly" toggle.
 - **`sqlite-vec` extension:** only if in-JS cosine over the 400-candidate cap ever becomes a
   bottleneck (it won't at this scale) — see §3.
+- **Age-matched early scoring (x-factor §8):** compare a day-1 count against the creator's OWN
+  previous day-1 counts from `post_snapshots`, so a post can be scored honestly before it matures
+  instead of being flagged provisional. Needs about 8 same-age observations per creator, roughly a
+  month of daily refresh from mid-September 2026. Design it after `post_snapshots` has filled in; do
+  NOT project a young post's final value from a growth multiplier (the day-1 IQR of what is still to
+  come is 1.3x–2.4x — a projected number looks confident and is wrong).
 
 ---
 
@@ -2116,6 +2171,14 @@ repeatable format.
 - `jobs/refresh-engagement.ts` `refreshRecentEngagement()` — batches of 25 creators, one actor run
   each; updates `posts` in place AND appends to `post_snapshots`; a failed batch is logged and
   skipped, never fatal.
+- **The refresh triggers an x-factor recompute (§8).** After the snapshots are recorded, the job
+  calls `recomputeXFactors` on the authors it touched. This is load-bearing: `refreshEngagement`
+  rewrites likes/comments/shares in place but `scraped_at` never changes, so without the recompute a
+  refreshed post keeps a stale `x_score`/`x_factor`. The x-factor's `measured_at` is derived from the
+  latest `post_snapshots.captured_at` (which the refresh DID advance), so a fresh recompute both
+  rescores the post against its now-current numbers and lets it cross the 3-day maturity line as its
+  snapshots age. The recompute is non-fatal: a failure inside it is logged and reported in the
+  result (`rescored` count, plus an entry in `errors`) but never loses the day's snapshots.
 - `GET /api/post-growth?days=&asOf=&authorId=` — the recent list, or one creator plus their own
   **median day-1** yardstick. `POST /api/post-growth/refresh` — CSRF-guarded, token-gated, returns
   the run cost.

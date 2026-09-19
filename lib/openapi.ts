@@ -76,8 +76,22 @@ export const FILTER_PARAMS: readonly ApiParam[] = [
     name: 'minXFactor',
     type: 'number',
     description:
-      'Only posts whose x_factor (weighted engagement ÷ that author’s 30-day baseline) is at least this. Posts with no baseline yet (x_factor null) are excluded.',
+      'Only posts whose x_factor (weighted engagement ÷ that author’s current median level, mature posts only) is at least this. Posts with no level yet (x_factor null) are excluded.',
     example: '2',
+  },
+  {
+    name: 'minXScore',
+    type: 'number',
+    description:
+      'Only posts whose x_score (robust rarity z: how many σ above the author’s usual post, §8) is at least this. Posts with no score yet (x_score null) are excluded. Typical thresholds: 1.5 notable, 2.5 rare.',
+    example: '2.5',
+  },
+  {
+    name: 'includeProvisional',
+    type: 'boolean',
+    description:
+      'Whether to include posts still inside the 3-day maturity window (x_provisional = 1), whose engagement is still climbing. Default true; set false to see only settled, mature posts.',
+    example: 'false',
   },
   {
     name: 'timeframe',
@@ -94,7 +108,7 @@ const PAGING_PARAMS: readonly ApiParam[] = [
     name: 'sort',
     type: 'string',
     description:
-      'Ordering. Default: recent (posted_at desc). `relevance` ranks by full-text match quality (bm25) and therefore requires `q`/`keywords`; without them it falls back to recent.',
+      'Ordering. Default: recent (posted_at desc). `xscore` ranks by the robust rarity z (§8, the recommended outlier sort); `xfactor` ranks by the raw ratio and is kept for back-compat. `relevance` ranks by full-text match quality (bm25) and therefore requires `q`/`keywords`; without them it falls back to recent.',
     enum: SORTS,
   },
   { name: 'page', type: 'integer', description: '1-based page number. Default: 1.' },
@@ -233,7 +247,7 @@ export function buildManifest(): Record<string, unknown> {
       clusteringCandidateCap: CANDIDATE_CAP,
     },
     notes: [
-      'x_factor = a post’s weighted engagement (likes·1 + comments·3 + shares·5) ÷ the same author’s mean weighted engagement over the prior 30 days. It needs ≥3 prior posts, so it is null on new authors.',
+      'x_score = a robust z-score of a post’s logged weighted engagement (likes·1 + comments·3 + shares·5) against the same author’s own recent history: the level is the median log-score of their last 10 mature posts within 60 days, the spread is the MAD of detrended residuals over 180 days (floored at 0.15 log units). x_score is how many σ above (or below) their usual post this one is — 1.5 notable, 2.5 rare. x_factor is the plain ratio of the post’s weighted engagement to that median level. Only mature posts (last measured ≥3 days after posting) feed the baselines; posts under 3 days old carry x_provisional=1 and posts under 1 day old are not scored (x_score null). Both are null until an author has enough history.',
       'Grouping modes return every candidate in `posts` plus the groups as id lists — resolve members by id.',
       'Keyword search is FTS5: whole words (not substrings), stemmed, phrases when a term contains a space. Add semantic=true to union in meaning-based hits.',
       'Image and vector data are never serialized; `media` carries the renderable urls.',

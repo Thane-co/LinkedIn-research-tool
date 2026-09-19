@@ -20,6 +20,10 @@ export interface Filters {
   minLikes: number
   minShares: number
   minXFactor: number
+  // §8: floor on the robust rarity z (x_score). 0 = no floor.
+  minXScore: number
+  // §8: when true, hide posts still inside the 3-day maturity window (x_provisional = 1).
+  hideProvisional: boolean
   timeframe: Timeframe
   dateFrom?: string
   dateTo?: string
@@ -382,6 +386,16 @@ export function DashboardFilterBar({
       <NumberField label="Min likes" title="minimum likes" value={filters.minLikes} onChange={(n) => set({ minLikes: n })} />
       <NumberField label="Min shares" title="minimum shares" value={filters.minShares} onChange={(n) => set({ minShares: n })} />
       <NumberField label="Min x-factor" title="minimum x-factor" step={0.1} value={filters.minXFactor} onChange={(n) => set({ minXFactor: n })} />
+      <NumberField label="Min rarity (σ)" title="minimum rarity z-score (x_score)" step={0.5} value={filters.minXScore} onChange={(n) => set({ minXScore: n })} />
+
+      <label className="filter-bar__toggle" title="hide posts under 3 days old whose engagement is still climbing">
+        <input
+          type="checkbox"
+          checked={filters.hideProvisional}
+          onChange={(e) => set({ hideProvisional: e.target.checked })}
+        />
+        Hide posts still growing
+      </label>
 
       <label className="filter-bar__field">
         Sort
@@ -392,7 +406,7 @@ export function DashboardFilterBar({
         >
           <option value="recent">Newest</option>
           <option value="likes">Most liked</option>
-          <option value="xfactor">Highest x-factor</option>
+          <option value="xscore">Highest x-factor</option>
           <option value="relevance">Best match</option>
         </select>
       </label>
