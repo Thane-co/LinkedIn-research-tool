@@ -693,6 +693,54 @@ CLI: `npm run posts:graduate [-- --max N]`. Scheduled after the daily refresh.
 *Tests:* `tests/unit/jobs/graduate-stuck.test.ts` — stuck/healthy/stranger/window/snapshot-unsticks
 selection cases, cap + remainder, failed-batch non-fatality, zero-cost no-op.
 
+### 8.6 Cold-start backfill (`jobs/backfill-history.ts`, added 2026-09-26)
+
+A gap §8.5 cannot close either: ~10 creators added to the roster on 2026-09-10 (e.g.
+`shubhamsaboo`, `stevenouri`, `paul-storm`) have **zero pre-roster history** — the daily scrape
+only captures posts going forward from the day a creator joins the roster. x-factor needs
+`MIN_SPREAD_POSTS` (15) mature prior posts (and `MIN_RESIDUALS` = 8 detrended residuals) in the
+180-day spread window before it can score anything at all; the graduation pass confirmed
+re-reading these creators doesn't help, because the history simply isn't in the DB to graduate
+from. This is a **one-time backfill**: scrape each cold-start creator's OLDER posts (the actor's
+deepest `postedLimit`, `'all'` → `'any'`) via the SAME actor + insert path as the daily scrape
+(`jobs/scrape.ts` → `lib/db/posts.repo.insertPosts`) — no second insert path, and no schema
+changes (backfilled posts are real posts, inserted exactly like any other scraped post).
+
+`listColdStartAuthors` (posts.repo): every roster LinkedIn author with fewer than
+`MIN_MATURE_POSTS` (20, a small margin above `MIN_SPREAD_POSTS`) posts whose `posted_at` is
+30+ days before `asOf`. An author with zero posts at all still qualifies (LEFT JOIN +
+`COUNT` collapsing to 0). Ordered fewest-mature-posts-first so a capped run heals the neediest
+creators first.
+
+`backfillColdStartHistory({ asOf?, dryRun?, postsPerCreator?, maxPosts?, minMaturePosts? })`:
+1. Resolve qualifying creators via `listColdStartAuthors`.
+2. **`dryRun` (default false):** report the qualifying creator ids, the posts the run WOULD fetch
+   (`min(creators, floor(maxPosts / postsPerCreator)) * postsPerCreator`, capped at `maxPosts`),
+   and the estimated cost (`estimated_posts * POST_SCRAPE_COST_PER_POST`) — **zero Apify calls**.
+3. **Real run:** for each qualifying creator (in order), request
+   `min(postsPerCreator, remainingBudget)` older posts via
+   `buildLinkedInCreatorInput([profile_url], 'all')` with `maxPosts` overridden to the per-creator
+   request size, map + dedupe against `findExistingIds` (never re-insert a known id), insert fresh
+   rows via `insertPosts` (the daily scrape's own path), and decrement the run's total post budget
+   by however many items actually came back. Stops as soon as the budget is exhausted — never
+   starts a request that would already be over cap.
+4. Recompute x-factor (`recomputeXFactors`, §8.4) scoped to every touched author once, after the
+   loop.
+5. A failed actor call for one creator is logged + reported in `errors`, never fatal to the run
+   (identical failure semantics to §8.5).
+
+**Cost guard (Basia-approved budget):** `POST_SCRAPE_COST_PER_POST` ($0.002/post), target ~30
+posts/creator for the ~10 cold-start creators (≈ $0.60–$1.00), hard-capped at `maxPosts` (default
+1500 ≈ $3 ceiling) across the whole run regardless of how many creators qualify.
+
+CLI: `npm run posts:backfill -- --dry-run` (report only) / `npm run posts:backfill [-- --max-posts
+N] [-- --posts-per-creator N]` (real run). **Not scheduled** — a one-time job for the current
+cold-start cohort; the daily scrape and §8.5 graduation pass carry every creator forward from
+here.
+*Tests:* `tests/unit/jobs/backfill-history.test.ts` — cold-start selection (zero-post / recent-only
+/ non-roster / at-threshold), dry-run reporting + zero Apify calls, real-run fetch + dedupe +
+recompute, duplicate-id skip, total-budget cap, failed-creator non-fatality, zero-qualifying no-op.
+
 ---
 
 ## 9. Grouping / clustering specification (pure)

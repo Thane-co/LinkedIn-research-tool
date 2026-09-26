@@ -30,6 +30,7 @@
     "post-loop:daily": "tsx scripts/daily-post-performance.ts",
     "posts:refresh": "node scripts/refresh-engagement.mjs",
     "posts:graduate": "tsx scripts/graduate-stuck.ts",
+    "posts:backfill": "tsx scripts/backfill-history.ts",
     "pretest": "node scripts/check-node.mjs",
     "predev": "node scripts/check-node.mjs",
     "prebuild": "node scripts/check-node.mjs",
@@ -38,6 +39,7 @@
     "prepost-loop:daily": "node scripts/check-node.mjs",
     "preposts:refresh": "node scripts/check-node.mjs",
     "preposts:graduate": "node scripts/check-node.mjs",
+    "preposts:backfill": "node scripts/check-node.mjs",
     "pretest:coverage": "node scripts/check-node.mjs"
   },
   "dependencies": {

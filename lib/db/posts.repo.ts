@@ -698,3 +698,36 @@ export function listStuckAuthors(opts: {
     )
     .all(asOf, opts.minAgeDays, asOf, opts.maxAgeDays, MATURITY_DAYS) as StuckAuthor[]
 }
+
+/** §8.6 cold-start backfill: a roster LinkedIn author with fewer than `minMaturePosts` posts
+ * older than 30 days (i.e. not enough mature pre-roster history for x-factor to ever score
+ * anything). Every roster author is considered — an author with ZERO posts at all still
+ * qualifies (LEFT JOIN + COALESCE(count, 0)). Ordered by fewest mature posts first so a capped
+ * run heals the neediest creators first. */
+export interface ColdStartAuthor {
+  author_id: string
+  profile_url: string
+  mature_posts: number
+}
+
+export function listColdStartAuthors(opts: {
+  asOf?: string
+  minMaturePosts: number
+}): ColdStartAuthor[] {
+  const asOf = opts.asOf ?? new Date().toISOString()
+  return getDb()
+    .prepare(
+      `SELECT c.author_id, c.profile_url, COUNT(p.id) AS mature_posts
+       FROM creators c
+       LEFT JOIN posts p
+         ON p.author_id = c.author_id
+         AND p.platform = 'linkedin'
+         AND p.posted_at IS NOT NULL
+         AND julianday(?) - julianday(p.posted_at) >= 30
+       WHERE c.platform = 'linkedin'
+       GROUP BY c.author_id, c.profile_url
+       HAVING mature_posts < ?
+       ORDER BY mature_posts ASC, c.author_id ASC`,
+    )
+    .all(asOf, opts.minMaturePosts) as ColdStartAuthor[]
+}
