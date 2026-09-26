@@ -1,6 +1,6 @@
 // Layer 2 — post queries (PRD §12 step 13). All SQL for posts lives here (no inline SQL elsewhere).
 
-import { CANDIDATE_CAP, TIMEFRAME_DAYS } from '@/lib/config'
+import { CANDIDATE_CAP, MATURITY_DAYS, TIMEFRAME_DAYS } from '@/lib/config'
 import { getDb } from '@/lib/db/db'
 import { buildFtsMatch } from '@/lib/pure/fts-query'
 import { blobToVector } from '@/lib/pure/vector-blob'
@@ -660,4 +660,41 @@ export function setEmbedding(
       id,
     )
   }
+}
+
+/** §8 graduation: an author from the roster with posts aged inside [minAgeDays, maxAgeDays]
+ * whose LAST measurement (latest snapshot, falling back to scraped_at) happened under
+ * MATURITY_DAYS after posting — i.e. posts stuck provisional that a re-read would graduate.
+ * Ordered by stuck-post count so a capped run heals the worst gaps first. */
+export interface StuckAuthor {
+  author_id: string
+  profile_url: string
+  stuck_posts: number
+}
+
+export function listStuckAuthors(opts: {
+  asOf?: string
+  minAgeDays: number
+  maxAgeDays: number
+}): StuckAuthor[] {
+  const asOf = opts.asOf ?? new Date().toISOString()
+  return getDb()
+    .prepare(
+      `SELECT p.author_id, c.profile_url, COUNT(*) AS stuck_posts
+       FROM posts p
+       JOIN creators c ON c.author_id = p.author_id AND c.platform = 'linkedin'
+       LEFT JOIN (
+         SELECT post_id, MAX(captured_at) AS last_captured_at
+         FROM post_snapshots GROUP BY post_id
+       ) s ON s.post_id = p.id
+       WHERE p.platform = 'linkedin'
+         AND p.posted_at IS NOT NULL
+         AND julianday(?) - julianday(p.posted_at) >= ?
+         AND julianday(?) - julianday(p.posted_at) <= ?
+         AND julianday(MAX(p.scraped_at, COALESCE(s.last_captured_at, p.scraped_at)))
+             - julianday(p.posted_at) < ?
+       GROUP BY p.author_id, c.profile_url
+       ORDER BY stuck_posts DESC, p.author_id ASC`,
+    )
+    .all(asOf, opts.minAgeDays, asOf, opts.maxAgeDays, MATURITY_DAYS) as StuckAuthor[]
 }

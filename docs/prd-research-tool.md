@@ -669,6 +669,30 @@ Triggered after every scrape **AND** after every engagement refresh (§22), scop
 5. Non-fatal: log errors, never let a recompute failure abort the scrape or lose a refresh's
    snapshots.
 
+### 8.5 Graduation pass (`jobs/graduate-stuck.ts`, added 2026-09-26)
+
+The gap §8.4 alone cannot close: a post measured ONLY while young (`age < MATURITY_DAYS` at every
+measurement) keeps `x_provisional=1` and stale counts forever once it slips out of the daily
+refresh's `'week'` window — the recompute fires, but on measurements that never matured. Diagnosed
+live: 61/63 roster creators had such gaps; creators added mid-month had zero scored posts.
+
+`graduateStuckPosts({ asOf?, maxAuthors? })`:
+1. `listStuckAuthors` (posts.repo): roster authors having posts aged within
+   `[MATURITY_DAYS, GRADUATION_WINDOW_DAYS=30]` whose last measurement
+   (`MAX(scraped_at, latest snapshot)`) was under `MATURITY_DAYS` after posting. Ordered by
+   stuck-post count desc so a capped run heals the worst gaps first. Keyword-scraped non-roster
+   authors are excluded (no history → can never score; not worth paid re-reads).
+2. Re-read the selected authors once via the same actor + input as the daily refresh
+   (`ENGAGEMENT_REFRESH_TIMEFRAME`), snapshot every returned post, refresh counts in place,
+   insert unknowns (already paid for), then recompute scoped to touched authors (§8.4).
+3. `maxAuthors` (default 25) caps Apify spend per run; the remainder is reported
+   (`remaining_authors`) and heals on later runs. Zero stuck authors ⇒ zero actor calls, zero cost.
+4. Failure semantics identical to §22's refresh: a failed batch is logged and reported, never fatal.
+
+CLI: `npm run posts:graduate [-- --max N]`. Scheduled after the daily refresh.
+*Tests:* `tests/unit/jobs/graduate-stuck.test.ts` — stuck/healthy/stranger/window/snapshot-unsticks
+selection cases, cap + remainder, failed-batch non-fatality, zero-cost no-op.
+
 ---
 
 ## 9. Grouping / clustering specification (pure)

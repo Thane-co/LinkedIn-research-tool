@@ -28,7 +28,8 @@
     "scan:viral": "tsx scripts/scrape-viral-window.ts",
     "xfactor:backfill": "tsx scripts/recompute-xfactor.ts",
     "post-loop:daily": "tsx scripts/daily-post-performance.ts",
-    "posts:refresh": "node scripts/refresh-engagement.mjs"
+    "posts:refresh": "node scripts/refresh-engagement.mjs",
+    "posts:graduate": "tsx scripts/graduate-stuck.ts"
   },
   "dependencies": {
     "apify-client": "^2.9.3",
