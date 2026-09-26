@@ -5,7 +5,7 @@
   "license": "UNLICENSED",
   "description": "Single-user, fully-local research tool for finding viral social posts (LinkedIn + Twitter/X).",
   "engines": {
-    "node": ">=20"
+    "node": "20.x"
   },
   "scripts": {
     "dev": "next dev -H 127.0.0.1",
@@ -29,7 +29,16 @@
     "xfactor:backfill": "tsx scripts/recompute-xfactor.ts",
     "post-loop:daily": "tsx scripts/daily-post-performance.ts",
     "posts:refresh": "node scripts/refresh-engagement.mjs",
-    "posts:graduate": "tsx scripts/graduate-stuck.ts"
+    "posts:graduate": "tsx scripts/graduate-stuck.ts",
+    "pretest": "node scripts/check-node.mjs",
+    "predev": "node scripts/check-node.mjs",
+    "prebuild": "node scripts/check-node.mjs",
+    "prescan:viral": "node scripts/check-node.mjs",
+    "prexfactor:backfill": "node scripts/check-node.mjs",
+    "prepost-loop:daily": "node scripts/check-node.mjs",
+    "preposts:refresh": "node scripts/check-node.mjs",
+    "preposts:graduate": "node scripts/check-node.mjs",
+    "pretest:coverage": "node scripts/check-node.mjs"
   },
   "dependencies": {
     "apify-client": "^2.9.3",
