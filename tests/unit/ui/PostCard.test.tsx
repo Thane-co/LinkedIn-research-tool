@@ -163,6 +163,11 @@ describe('PostCard', () => {
     expect(imgs[0]).toHaveAttribute('src', 'https://img/only.png')
   })
 
+  it('lazy-loads images so a 50-card page only fetches what is on screen', () => {
+    render(<PostCard post={makePost({ media: { type: 'image', images: ['https://img/only.png'] } })} />)
+    expect(screen.getByRole('img')).toHaveAttribute('loading', 'lazy')
+  })
+
   it('renders a carousel (all images) with a count', () => {
     render(<PostCard post={makePost({ media: { type: 'image', images: ['a', 'b', 'c'] } })} />)
     expect(screen.getAllByRole('img')).toHaveLength(3)

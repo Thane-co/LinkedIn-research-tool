@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { DashboardFilterBar, type Filters } from '@/app/DashboardFilterBar'
@@ -27,6 +27,25 @@ const baseFilters = (over: Partial<Filters> = {}): Filters => ({
 const authors = [{ author_id: 'jane', author_name: 'Jane', platform: 'linkedin' as const }]
 
 describe('DashboardFilterBar', () => {
+  it('waits for typing to pause before applying a number filter (one search, not one per keystroke)', async () => {
+    const onChange = vi.fn()
+    render(<DashboardFilterBar filters={baseFilters()} availableAuthors={authors} onChange={onChange} />)
+    await userEvent.type(screen.getByLabelText(/min likes/i), '750')
+    expect(onChange).not.toHaveBeenCalled() // nothing fired mid-typing
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1))
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ minLikes: 750 }))
+  })
+
+  it('applies a typed number filter immediately on blur', () => {
+    const onChange = vi.fn()
+    render(<DashboardFilterBar filters={baseFilters()} availableAuthors={authors} onChange={onChange} />)
+    const input = screen.getByLabelText(/min likes/i)
+    fireEvent.change(input, { target: { value: '300' } })
+    fireEvent.blur(input)
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ minLikes: 300 }))
+  })
+
   it('toggles a platform into the platforms subset (§17.4)', async () => {
     const onChange = vi.fn()
     render(<DashboardFilterBar filters={baseFilters()} availableAuthors={authors} onChange={onChange} />)

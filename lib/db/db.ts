@@ -54,10 +54,12 @@ const ADDITIVE_COLUMNS: { table: string; column: string; type: string }[] = [
  *       list) but the column outlived the idea, and 7 creators silently sat on 'watch' — which the
  *       default creator scrape filtered OUT. A dead column that quietly changes behaviour is worse
  *       than no column.
+ *   4 — ANALYZE. The db had never been analyzed, so the planner chose indexes blind on a ~1GB posts
+ *       table. One-time (a few seconds); `PRAGMA optimize` on open keeps the stats fresh after that.
  * Bump this (and add a case to applyVersionedMigrations) whenever the search index must be rebuilt,
  * e.g. if the tokenizer or the indexed columns change.
  */
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 /**
  * Data migrations that must run exactly once, gated on `user_version`. CREATE TABLE IF NOT EXISTS
@@ -88,6 +90,9 @@ function applyVersionedMigrations(db: Database.Database): void {
       db.exec('ALTER TABLE creators DROP COLUMN tier')
     }
   }
+  if (current < 4) {
+    db.exec('ANALYZE')
+  }
   db.pragma(`user_version = ${SCHEMA_VERSION}`)
 }
 
@@ -113,7 +118,25 @@ export function migrate(db?: Database.Database): void {
   // §8 x-factor v2 index on an additive column — created here (not schema.sql) so it also lands on a
   // legacy db whose posts table predates the x_score column.
   target.exec('CREATE INDEX IF NOT EXISTS posts_xscore_idx ON posts(x_score DESC)')
+  // Covering indexes for the aggregate reads (corpus stats, last scrape, author dropdown). `posts` rows
+  // are ~13KB (two 4KB vectors + raw_data), so without these every GROUP BY reads the whole ~1GB file
+  // (2-4s each, measured). The partial indexes let the enrichment counts skip the blobs entirely.
+  // posts_author_filters_idx carries every non-FTS filter column (buildWhere in posts.repo) because the
+  // author dropdown is re-grouped under the active filters; add a column here when adding a filter.
+  // Here, not schema.sql, because `transcript` is an additive column.
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS posts_platform_stats_idx ON posts(platform, scraped_at, author_id, likes, posted_at);
+    DROP INDEX IF EXISTS posts_author_name_idx;
+    CREATE INDEX IF NOT EXISTS posts_author_filters_idx ON posts(author_id, author_name, platform,
+      likes, shares, posted_at, market, x_factor, x_score, x_provisional);
+    CREATE INDEX IF NOT EXISTS posts_market_idx ON posts(market) WHERE market IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS posts_embedded_idx ON posts(platform) WHERE embedding IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS posts_image_embedded_idx ON posts(platform) WHERE image_embedding IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS posts_transcript_idx ON posts(platform) WHERE transcript IS NOT NULL;
+  `)
   applyVersionedMigrations(target)
+  // Cheap when stats are current: re-analyzes only tables whose row counts drifted since (see migration 4).
+  target.pragma('optimize')
   seedSettingsDefaults(target)
 }
 

@@ -105,6 +105,8 @@ function CreatorAvatar({ name, avatar }: { name: string; avatar?: string | null 
 /** A numeric filter input that shows empty (with a "0" placeholder) instead of a literal 0 — so there's
  *  no stuck leading zero to delete. Keeps its own text state so decimals (e.g. "0.5") type cleanly, and
  *  emits a parsed number (empty → 0) to the parent. */
+const NUMBER_COMMIT_DELAY_MS = 400
+
 function NumberField({
   label,
   value,
@@ -119,6 +121,20 @@ function NumberField({
   title?: string
 }): JSX.Element {
   const [text, setText] = useState(value ? String(value) : '')
+  // Typing "750" must run ONE search, not three (7, 75, 750): commit once typing pauses, or on blur.
+  // onChange is read through a ref so a delayed commit merges into the filters current at fire time.
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+  const pending = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const commit = (raw: string): void => {
+    if (pending.current) clearTimeout(pending.current)
+    pending.current = null
+    const n = raw === '' ? 0 : Number(raw)
+    if (n !== value) onChangeRef.current(n)
+  }
+  useEffect(() => () => {
+    if (pending.current) clearTimeout(pending.current)
+  }, [])
   // Re-sync when the value changes externally (e.g. filters reset), without clobbering live typing.
   useEffect(() => {
     if (Number(text || 0) !== value) setText(value ? String(value) : '')
@@ -137,7 +153,11 @@ function NumberField({
         onChange={(e) => {
           const raw = e.target.value
           setText(raw)
-          onChange(raw === '' ? 0 : Number(raw))
+          if (pending.current) clearTimeout(pending.current)
+          pending.current = setTimeout(() => commit(raw), NUMBER_COMMIT_DELAY_MS)
+        }}
+        onBlur={(e) => {
+          if (pending.current) commit(e.target.value)
         }}
       />
     </label>

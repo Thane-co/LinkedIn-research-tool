@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { http, HttpResponse } from 'msw'
+import { delay, http, HttpResponse } from 'msw'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -39,6 +39,26 @@ describe('DashboardClient', () => {
     server.use(http.get('*/api/posts', () => new HttpResponse(null, { status: 500 })))
     render(<DashboardClient />)
     expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load|failed|error/i)
+  })
+
+  it('never lets a slow, older search overwrite a newer one', async () => {
+    let calls = 0
+    server.use(
+      http.get('*/api/posts', async () => {
+        calls++
+        if (calls === 1) {
+          await delay(300) // the mount search is slow and resolves LAST
+          return HttpResponse.json(postsResponse([post({ id: 'old', author_name: 'Stale Result' })], 1))
+        }
+        return HttpResponse.json(postsResponse([post({ id: 'new', author_name: 'Fresh Result' })], 2))
+      }),
+    )
+    render(<DashboardClient />)
+    await userEvent.click(screen.getByRole('button', { name: /substack/i })) // newer search
+    expect(await screen.findByText('Fresh Result')).toBeInTheDocument()
+    await delay(400) // let the stale mount response land
+    expect(screen.queryByText('Stale Result')).not.toBeInTheDocument()
+    expect(screen.getByText('Fresh Result')).toBeInTheDocument()
   })
 
   it('fetches posts on mount and shows the result count', async () => {

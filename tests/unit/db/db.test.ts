@@ -10,9 +10,10 @@ const tableNames = (db: Database.Database): string[] =>
     .map((r) => r.name)
     .sort()
 
-// The six real tables, excluding FTS5's virtual table and its `posts_fts_*` shadow tables.
+// The real tables, excluding FTS5's virtual table + its `posts_fts_*` shadow tables and the
+// `sqlite_stat*` tables ANALYZE creates (migration 4) — both are SQLite-owned, not schema.
 const contentTableNames = (db: Database.Database): string[] =>
-  tableNames(db).filter((n) => !n.startsWith('posts_fts'))
+  tableNames(db).filter((n) => !n.startsWith('posts_fts') && !n.startsWith('sqlite_'))
 
 const indexNames = (db: Database.Database): string[] =>
   (db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'").all() as {
@@ -48,6 +49,41 @@ describe('migrate', () => {
     expect(idx).toContain('posts_author_posted_idx')
     expect(idx).toContain('posts_url_unique_idx')
     expect(idx).toContain('scrape_jobs_started_idx')
+  })
+
+  it('creates covering indexes so the aggregate reads never scan the fat posts rows', () => {
+    const db = new Database(':memory:')
+    migrate(db)
+    expect(indexNames(db)).toEqual(
+      expect.arrayContaining([
+        'posts_platform_stats_idx', 'posts_author_filters_idx', 'posts_market_idx',
+        'posts_embedded_idx', 'posts_image_embedded_idx', 'posts_transcript_idx',
+      ]),
+    )
+    const plan = (sql: string): string =>
+      (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[]).map((r) => r.detail).join(' | ')
+    expect(plan('SELECT platform, MAX(scraped_at) FROM posts GROUP BY platform')).toContain(
+      'COVERING INDEX posts_platform_stats_idx',
+    )
+    expect(
+      plan('SELECT author_id, author_name, platform, COUNT(*) FROM posts WHERE author_id IS NOT NULL GROUP BY 1, 2, 3'),
+    ).toContain('COVERING INDEX posts_author_filters_idx')
+    // The dropdown is re-grouped under every filter; a filter column missing from the index would send
+    // the query back to the fat rows (2.4s for minLikes=7 on the real corpus). `market = ?` is left out:
+    // on this empty, un-analyzed db the planner prefers posts_market_idx for an equality, while on the real
+    // analyzed corpus (90k of 94k posts are 'ai') it picks this covering index.
+    expect(
+      plan(`SELECT author_id, author_name, platform, COUNT(*) FROM posts WHERE likes >= 7 AND shares >= 1
+            AND posted_at >= '2026-01-01' AND x_factor >= 1 AND x_score >= 1 AND x_provisional = 0
+            AND author_id IS NOT NULL GROUP BY 1, 2, 3`),
+    ).toContain('COVERING INDEX posts_author_filters_idx')
+    // searchPosts ranks pages through this index (FROM_POSTS_SLIM): every sort key must be in it too.
+    for (const sortKey of ['posted_at', 'likes', 'x_factor', 'x_score']) {
+      expect(
+        plan(`SELECT rowid FROM posts INDEXED BY posts_author_filters_idx WHERE likes >= 1 AND market = 'ai'
+              ORDER BY ${sortKey} DESC LIMIT 50`),
+      ).toContain('COVERING INDEX posts_author_filters_idx')
+    }
   })
 
   it('enforces the unique url index (dedup safety net)', () => {

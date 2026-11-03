@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { getDb, resetDb } from '@/lib/db/db'
 import {
@@ -387,6 +391,36 @@ describe('clustering candidates + author history', () => {
     // platform filter narrows the list; the authors filter must NOT (so the dropdown stays full)
     const li = getAvailableAuthors({ platform: 'linkedin', authors: ['joe'] })
     expect(li.map((a) => a.author_id)).toEqual(['jane'])
+  })
+
+  it('getAvailableAuthors and getCorpusStats are memoized but never stale after a write', () => {
+    seed([{ id: 'a', author_id: 'jane', author_name: 'Jane' }])
+    const first = getAvailableAuthors({})
+    expect(getAvailableAuthors({})).toBe(first) // same object: served from the cache
+    expect(getCorpusStats().totalPosts).toBe(1)
+
+    seed([{ id: 'b', author_id: 'joe', author_name: 'Joe' }])
+    expect(getAvailableAuthors({}).map((a) => a.author_id)).toEqual(['jane', 'joe'])
+    expect(getCorpusStats().totalPosts).toBe(2)
+  })
+
+  it('the author cache sees commits from ANOTHER connection (a scrape job in its own process)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'authors-cache-'))
+    const path = join(dir, 'research.db')
+    try {
+      getDb(path)
+      seed([{ id: 'a', author_id: 'jane', author_name: 'Jane' }])
+      expect(getAvailableAuthors({}).map((a) => a.author_id)).toEqual(['jane'])
+
+      const other = new Database(path)
+      other.prepare("INSERT INTO posts (id, platform, url, author_id, author_name, scraped_at) VALUES ('b', 'linkedin', 'u-b', 'joe', 'Joe', '2026-10-01T00:00:00.000Z')").run()
+      other.close()
+
+      expect(getAvailableAuthors({}).map((a) => a.author_id)).toEqual(['jane', 'joe'])
+    } finally {
+      resetDb()
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('getAuthorHistory returns the author rows ordered by posted_at', () => {
