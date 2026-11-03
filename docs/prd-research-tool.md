@@ -294,6 +294,17 @@ CREATE INDEX IF NOT EXISTS posts_platform_idx         ON posts(platform);
 CREATE UNIQUE INDEX IF NOT EXISTS posts_url_unique_idx ON posts(url) WHERE url IS NOT NULL;
 -- find unembedded posts quickly
 CREATE INDEX IF NOT EXISTS posts_unembedded_idx       ON posts(embedded_at) WHERE embedding IS NULL;
+-- aggregate reads (corpus stats, last scrape, author dropdown): covering/partial indexes so a GROUP BY
+-- never reads the ~13KB posts rows (two 4KB vectors + raw_data). Created in db.ts migrate() because
+-- `transcript` is an additive column.
+CREATE INDEX IF NOT EXISTS posts_platform_stats_idx   ON posts(platform, scraped_at, author_id, likes, posted_at);
+-- carries every non-FTS filter column: the author dropdown is re-grouped under the active filters
+CREATE INDEX IF NOT EXISTS posts_author_filters_idx   ON posts(author_id, author_name, platform,
+  likes, shares, posted_at, market, x_factor, x_score, x_provisional);
+CREATE INDEX IF NOT EXISTS posts_market_idx           ON posts(market) WHERE market IS NOT NULL;
+CREATE INDEX IF NOT EXISTS posts_embedded_idx         ON posts(platform) WHERE embedding IS NOT NULL;
+CREATE INDEX IF NOT EXISTS posts_image_embedded_idx   ON posts(platform) WHERE image_embedding IS NOT NULL;
+CREATE INDEX IF NOT EXISTS posts_transcript_idx       ON posts(platform) WHERE transcript IS NOT NULL;
 ```
 
 > **Do NOT create a vector index.** Vectors live in BLOBs; similarity is computed in JS on

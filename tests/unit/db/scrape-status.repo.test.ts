@@ -62,6 +62,13 @@ describe('getLastScrapeByPlatform', () => {
     expect(last.substack).toBeNull()
     expect(last.instagram).toBeNull()
   })
+  it('is memoized until the db changes (it runs on every settings load)', () => {
+    insertPosts([post({ platform: 'linkedin', scraped_at: '2026-09-01T00:00:00.000Z' })])
+    const first = getLastScrapeByPlatform()
+    expect(getLastScrapeByPlatform()).toBe(first) // same object: served from the cache
+    insertPosts([post({ platform: 'linkedin', scraped_at: '2026-09-05T00:00:00.000Z' })])
+    expect(getLastScrapeByPlatform().linkedin).toBe('2026-09-05T00:00:00.000Z')
+  })
 })
 
 describe('backfillPersonas', () => {

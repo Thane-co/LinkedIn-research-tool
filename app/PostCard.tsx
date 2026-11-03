@@ -64,7 +64,7 @@ function PostImage({ src, alt, className }: { src: string | null | undefined; al
     )
   }
   return (
-    <img className={className} src={proxied} alt={alt} onError={() => setFailed(true)} />
+    <img className={className} src={proxied} alt={alt} loading="lazy" decoding="async" onError={() => setFailed(true)} />
   )
 }
 

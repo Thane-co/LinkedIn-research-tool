@@ -122,18 +122,24 @@ export function DashboardClient() {
 
   // Load a page. Page 1 replaces the results; later pages append (Load more). Filters go in the query
   // string, but the author include-list stays small (empty = all), so the URL never overflows.
+  // Only the latest request may write state: responses can arrive out of order, and a slow older
+  // search landing last would otherwise replace the results of the filters now on screen.
+  const latestRequest = useRef(0)
   const load = useCallback(
     async (pageToLoad: number): Promise<void> => {
+      const requestId = ++latestRequest.current
       try {
         setError(null)
         setLoading(true)
         const res = await apiFetch<PostsResponse>(`/api/posts?${toQuery(filters)}&page=${pageToLoad}`)
+        if (requestId !== latestRequest.current) return
         setData((prev) => (pageToLoad > 1 ? { ...res, posts: [...prev.posts, ...res.posts] } : res))
         setPage(pageToLoad)
       } catch (e) {
+        if (requestId !== latestRequest.current) return
         setError(e instanceof Error ? e.message : 'Failed to load posts')
       } finally {
-        setLoading(false)
+        if (requestId === latestRequest.current) setLoading(false)
       }
     },
     [filters],

@@ -2,6 +2,7 @@
 
 import { CANDIDATE_CAP, MATURITY_DAYS, TIMEFRAME_DAYS } from '@/lib/config'
 import { getDb } from '@/lib/db/db'
+import { cachedQuery } from '@/lib/db/query-cache'
 import { buildFtsMatch } from '@/lib/pure/fts-query'
 import { blobToVector } from '@/lib/pure/vector-blob'
 import type { MatchMode, Platform, PostRow, SortMode, Timeframe } from '@/lib/types'
@@ -49,6 +50,13 @@ const QUALIFIED_POST_COLUMNS = POST_COLUMNS.split(',')
 /** The FROM clause: the search index is joined ONLY when there is a keyword query to match. */
 const FROM_POSTS = 'posts'
 const FROM_POSTS_FTS = 'posts JOIN posts_fts ON posts_fts.rowid = posts.rowid'
+/**
+ * The plain (non-FTS) FROM, pinned to the slim index that carries every filter + sort column (db.ts
+ * migrate). Left to itself the planner picks a one-column index (platform, market) and then reads
+ * every matching ~13KB row to sort or group them: 0.6-2.5s for "platform = linkedin" on the real
+ * corpus vs ~0.03s through this index, for every filter/sort combination measured.
+ */
+const FROM_POSTS_SLIM = 'posts INDEXED BY posts_author_filters_idx'
 
 const INSERT_SQL = `INSERT OR IGNORE INTO posts (${POST_COLUMNS.replace(/\s+/g, ' ').trim()}) VALUES (
   @id, @platform, @url, @content, @author_name, @author_url, @author_id, @author_type,
@@ -253,11 +261,16 @@ export function searchPosts(filters: PostFilters): {
   const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(finite(filters.pageSize, DEFAULT_PAGE_SIZE))))
   const offset = (page - 1) * pageSize
 
-  const posts = db
-    .prepare(
-      `SELECT ${QUALIFIED_POST_COLUMNS} FROM ${from} ${clause} ${orderBy(filters.sort, fts)} LIMIT ? OFFSET ?`,
-    )
-    .all(...params, pageSize, offset) as PostRow[]
+  // Two steps: rank and page on rowids only, then hydrate just that page. Selecting the full columns in
+  // the ranking query would carry every matching row's vectors + raw_data through the sort.
+  const pageRowids = (
+    db
+      .prepare(
+        `SELECT posts.rowid AS rid FROM ${fts ? from : FROM_POSTS_SLIM} ${clause} ${orderBy(filters.sort, fts)} LIMIT ? OFFSET ?`,
+      )
+      .all(...params, pageSize, offset) as { rid: number }[]
+  ).map((r) => r.rid)
+  const posts = getPostsByRowids(pageRowids)
 
   return { posts, total, page, pageSize, hasMore: offset + posts.length < total }
 }
@@ -317,6 +330,16 @@ export function searchFtsRankedIds(filters: PostFilters, limit: number): string[
       )
       .all(...params, limit) as { id: string }[]
   ).map((r) => r.id)
+}
+
+/** Hydrate posts by rowid, in the order given (the page's ranking). */
+function getPostsByRowids(rowids: number[]): PostRow[] {
+  if (rowids.length === 0) return []
+  const rows = getDb()
+    .prepare(`SELECT rowid AS rid, ${POST_COLUMNS} FROM posts WHERE rowid IN (${rowids.map(() => '?').join(',')})`)
+    .all(...rowids) as (PostRow & { rid: number })[]
+  const byRowid = new Map(rows.map(({ rid, ...row }) => [rid, row as PostRow]))
+  return rowids.map((rid) => byRowid.get(rid)).filter((r): r is PostRow => r !== undefined)
 }
 
 /** Hydrate posts by id, returned IN THE ORDER GIVEN — the fused ranking, not the table's. */
@@ -392,6 +415,11 @@ export interface CorpusStats {
  * which platforms were REQUESTED, not which ones returned anything.
  */
 export function getLastScrapeByPlatform(): Record<Platform, string | null> {
+  // Memoized until the db changes (see query-cache): it runs on every settings load.
+  return cachedQuery('lastScrapeByPlatform', computeLastScrapeByPlatform)
+}
+
+function computeLastScrapeByPlatform(): Record<Platform, string | null> {
   const rows = getDb()
     .prepare('SELECT platform, MAX(scraped_at) AS last FROM posts GROUP BY platform')
     .all() as { platform: Platform; last: string | null }[]
@@ -402,7 +430,12 @@ export function getLastScrapeByPlatform(): Record<Platform, string | null> {
   return last
 }
 
+/** Full-scans `posts`, so it's memoized until the db changes (see query-cache). */
 export function getCorpusStats(): CorpusStats {
+  return cachedQuery('corpusStats', computeCorpusStats)
+}
+
+function computeCorpusStats(): CorpusStats {
   const db = getDb()
   const platforms = db
     .prepare(
@@ -419,12 +452,13 @@ export function getCorpusStats(): CorpusStats {
     .all() as CorpusStats['markets']
   const counts = db
     .prepare(
-      `SELECT COUNT(*) AS totalPosts,
-              SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) AS embedded,
-              SUM(CASE WHEN image_embedding IS NOT NULL THEN 1 ELSE 0 END) AS imageEmbedded,
-              SUM(CASE WHEN transcript IS NOT NULL THEN 1 ELSE 0 END) AS withTranscript,
-              MAX(scraped_at) AS lastScrapedAt
-       FROM posts`,
+      // One subquery per count, not SUM(CASE ...) in a single pass: each count is then answered from
+      // its own partial index (db.ts migrate) instead of reading every ~13KB row of the table.
+      `SELECT (SELECT COUNT(*) FROM posts) AS totalPosts,
+              (SELECT COUNT(*) FROM posts INDEXED BY posts_embedded_idx WHERE embedding IS NOT NULL) AS embedded,
+              (SELECT COUNT(*) FROM posts INDEXED BY posts_image_embedded_idx WHERE image_embedding IS NOT NULL) AS imageEmbedded,
+              (SELECT COUNT(*) FROM posts INDEXED BY posts_transcript_idx WHERE transcript IS NOT NULL) AS withTranscript,
+              (SELECT MAX(scraped_at) FROM posts) AS lastScrapedAt`,
     )
     .get() as {
     totalPosts: number
@@ -507,6 +541,14 @@ function scoreIsBetter(a: [number, number, number], b: [number, number, number])
  * creators table (posts carry neither) by matching author_id.
  */
 export function getAvailableAuthors(filters: PostFilters): AvailableAuthor[] {
+  // Memoized until the db changes (see query-cache): the unfiltered GROUP BY full-scans `posts` and
+  // this runs on every search. Only the fields that shape the result go in the key — the author
+  // include-list is ignored here, and sort/paging don't affect it.
+  const { authors: _a, sort: _s, page: _p, pageSize: _ps, ...shaping } = filters
+  return cachedQuery(`authors:${JSON.stringify(shaping)}`, () => computeAvailableAuthors(filters))
+}
+
+function computeAvailableAuthors(filters: PostFilters): AvailableAuthor[] {
   const db = getDb()
   const { from, clause, params } = buildWhere({ ...filters, authors: undefined })
   const where = clause
@@ -516,7 +558,7 @@ export function getAvailableAuthors(filters: PostFilters): AvailableAuthor[] {
   const rows = db
     .prepare(
       `SELECT posts.author_id, posts.author_name, posts.platform, COUNT(*) AS cnt
-       FROM ${from} ${where}
+       FROM ${from === FROM_POSTS ? FROM_POSTS_SLIM : from} ${where}
        GROUP BY posts.author_id, posts.author_name, posts.platform`,
     )
     .all(...params) as { author_id: string; author_name: string | null; platform: Platform; cnt: number }[]
